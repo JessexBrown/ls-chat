@@ -131,6 +131,7 @@ export function normalizeXLiveCaptureMessage(payload: unknown, defaults: { chann
     displayName: parsed.displayName ?? parsed.username,
     channelId: parsed.channelId ?? parsed.sourceUrl ?? null,
     channelName: parsed.channelName ?? defaults.channelName ?? "X Live Capture",
+    sourceUrl: parsed.sourceUrl ?? null,
     message: parsed.message,
     fragments: [textFragment(parsed.message)],
     badges: [{ label: "Capture", type: "browser-capture", count: null }],

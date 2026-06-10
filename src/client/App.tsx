@@ -1,28 +1,51 @@
-import { ArrowDown, ChevronLeft, ChevronRight, LogIn, LogOut, Pause, Play, Radio, RefreshCw, Search, Send, Settings, Wifi, WifiOff, X } from "lucide-react";
+import {
+  ArrowDown,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Eye,
+  LogIn,
+  LogOut,
+  MessageCircle,
+  Pause,
+  Play,
+  Radio,
+  RefreshCw,
+  Search,
+  Send,
+  Settings,
+  Wifi,
+  WifiOff,
+  X
+} from "lucide-react";
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type Components, type ScrollerProps, type VirtuosoHandle } from "react-virtuoso";
-import type { ChatMessage, Platform } from "../shared/chat";
+import type { ChatMessage, Platform, ViewerSnapshot } from "../shared/chat";
 import { useChatStream } from "./useChatStream";
 
 const platformLabels: Record<Platform, string> = {
   twitch: "Twitch",
   kick: "Kick",
-  x: "X"
+  x: "X",
+  marketbubble: "MarketBubble"
 };
 
 const platformShortLabels: Record<Platform, string> = {
   twitch: "TW",
   kick: "KI",
-  x: "X"
+  x: "X",
+  marketbubble: "MB"
 };
 
 const platformColors: Record<Platform, string> = {
   twitch: "#a970ff",
   kick: "#53fc18",
-  x: "#e7eaee"
+  x: "#e7eaee",
+  marketbubble: "#32d9c3"
 };
 
-const platformOrder: Platform[] = ["twitch", "kick", "x"];
+const platformOrder: Platform[] = ["twitch", "kick", "x", "marketbubble"];
+const settingsPlatformOrder: Array<Exclude<Platform, "marketbubble">> = ["twitch", "kick", "x"];
 
 type ChatVirtuosoContext = {
   onScrollPositionChange: (scrollTop: number) => void;
@@ -56,6 +79,8 @@ type IntegrationStatus = {
 type HealthResponse = {
   demoEnabled: boolean;
   messageCount: number;
+  sources: ViewerSnapshot;
+  publicDashboard: PublicDashboardConfig;
   integrations: {
     statuses: Partial<Record<Platform, IntegrationStatus>>;
     twitch: {
@@ -119,6 +144,12 @@ type HealthResponse = {
         profilePath: string;
         debugPort: number;
         chromeFound: boolean;
+        activeTargets?: Array<{
+          id: string;
+          targetUrl: string;
+          channelName: string;
+          startedAt: string;
+        }>;
       };
       liveCapture?: {
         endpoint: string;
@@ -132,6 +163,14 @@ type HealthResponse = {
       rules?: Array<{ value: string; tag?: string }>;
     };
   };
+};
+
+type PublicDashboardConfig = {
+  title: string;
+  nativeChatLabel: string;
+  streamEmbedUrl: string | null;
+  streamWatchUrl: string | null;
+  publicUrl: string;
 };
 
 function formatTime(value: string) {
@@ -161,17 +200,65 @@ function IntegrationDot({ state }: { state: IntegrationState | undefined }) {
   return <span className={`integration-dot integration-${state ?? "disabled"}`} aria-hidden="true" />;
 }
 
+function formatViewerCount(value: number) {
+  return new Intl.NumberFormat(undefined, {
+    notation: value >= 10000 ? "compact" : "standard",
+    maximumFractionDigits: 1
+  }).format(value);
+}
+
+function sourceTitle(message: ChatMessage) {
+  const sourceLabel = message.sourceLabel ?? message.channelName ?? platformLabels[message.platform];
+  return `${platformLabels[message.platform]} / ${sourceLabel}`;
+}
+
+function ViewerSummary({ snapshot }: { snapshot: ViewerSnapshot }) {
+  const sourceLines = snapshot.sources.length
+    ? snapshot.sources
+        .map((source) => {
+          const count = source.viewerCount === null ? "unknown" : formatViewerCount(source.viewerCount);
+          return `${platformLabels[source.platform]} / ${source.label}: ${count}`;
+        })
+        .join("\n")
+    : "No active sources";
+
+  return (
+    <div className="viewer-summary" title={sourceLines}>
+      <button className="viewer-total" type="button" aria-label="Combined viewer count">
+        <Eye size={15} aria-hidden="true" />
+        <span>{formatViewerCount(snapshot.totalKnownViewers)}</span>
+      </button>
+      <div className="viewer-popover" role="tooltip">
+        {snapshot.sources.length > 0 ? (
+          snapshot.sources.map((source) => (
+            <div className="viewer-source-row" key={source.id}>
+              <div>
+                <PlatformBadge platform={source.platform} />
+                <span>{source.label}</span>
+              </div>
+              <strong>{source.viewerCount === null ? "unknown" : formatViewerCount(source.viewerCount)}</strong>
+            </div>
+          ))
+        ) : (
+          <span className="viewer-source-empty">No active sources</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MessageRow({ message }: { message: ChatMessage }) {
   const displayName = message.displayName ?? message.username;
-  const channelName = message.channelName ?? platformLabels[message.platform];
+  const originLabel = sourceTitle(message);
+  const sourceLabel = message.sourceLabel ?? message.channelName ?? platformLabels[message.platform];
 
   return (
     <article className={`message-row message-row-${message.platform}`}>
       <div className="message-line">
         <PlatformBadge platform={message.platform} />
         <time className="message-time">{formatTime(message.sentAt ?? message.receivedAt)}</time>
-        <span className="message-channel" title={channelName}>
-          {channelName}
+        <span className="message-channel" title={originLabel}>
+          {sourceLabel}
         </span>
         <span className="message-username" style={{ color: message.color ?? platformColors[message.platform] }}>
           {displayName}
@@ -228,7 +315,8 @@ async function responseErrorMessage(response: Response, fallback: string) {
 }
 
 export function App() {
-  const { messages, connectionState, counts } = useChatStream();
+  const isPublicDashboard = window.location.pathname.startsWith("/live");
+  const { messages, connectionState, counts, sourceSnapshot } = useChatStream(isPublicDashboard ? "viewer" : "admin");
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const previousVisibleMessageCount = useRef(0);
   const lastScrollTop = useRef(0);
@@ -241,7 +329,8 @@ export function App() {
   const [enabledPlatforms, setEnabledPlatforms] = useState<Record<Platform, boolean>>({
     twitch: true,
     kick: true,
-    x: true
+    x: true,
+    marketbubble: true
   });
   const [query, setQuery] = useState("");
   const [paused, setPaused] = useState(false);
@@ -249,7 +338,7 @@ export function App() {
   const [readingLocked, setReadingLocked] = useState(false);
   const [newMessagesAway, setNewMessagesAway] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activeSettingsPlatform, setActiveSettingsPlatform] = useState<Platform>("twitch");
+  const [activeSettingsPlatform, setActiveSettingsPlatform] = useState<Exclude<Platform, "marketbubble">>("twitch");
   const [broadcasterLogin, setBroadcasterLogin] = useState("");
   const [kickBroadcaster, setKickBroadcaster] = useState("");
   const [xTargetAccount, setXTargetAccount] = useState("");
@@ -257,6 +346,9 @@ export function App() {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [mockText, setMockText] = useState("Testing the unified feed");
   const [mockPlatform, setMockPlatform] = useState<Platform>("twitch");
+  const [publicConfig, setPublicConfig] = useState<PublicDashboardConfig | null>(null);
+  const [nativeUsername, setNativeUsername] = useState("viewer");
+  const [nativeMessage, setNativeMessage] = useState("");
 
   const loadHealth = useCallback(async () => {
     const response = await fetch("/api/health");
@@ -289,10 +381,34 @@ export function App() {
   }, [broadcasterLogin, kickBroadcaster, xRules, xTargetAccount]);
 
   useEffect(() => {
+    if (isPublicDashboard) {
+      return undefined;
+    }
+
     void loadHealth();
     const interval = window.setInterval(() => void loadHealth(), 5000);
     return () => window.clearInterval(interval);
-  }, [loadHealth]);
+  }, [isPublicDashboard, loadHealth]);
+
+  useEffect(() => {
+    if (!isPublicDashboard) {
+      return undefined;
+    }
+
+    let active = true;
+    fetch("/api/public/config")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { dashboard?: PublicDashboardConfig } | null) => {
+        if (active && body?.dashboard) {
+          setPublicConfig(body.dashboard);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+    };
+  }, [isPublicDashboard]);
 
   const filteredMessages = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -304,7 +420,8 @@ export function App() {
         message.message.toLowerCase().includes(normalizedQuery) ||
         message.username.toLowerCase().includes(normalizedQuery) ||
         (message.displayName ?? "").toLowerCase().includes(normalizedQuery) ||
-        (message.channelName ?? "").toLowerCase().includes(normalizedQuery);
+        (message.channelName ?? "").toLowerCase().includes(normalizedQuery) ||
+        (message.sourceLabel ?? "").toLowerCase().includes(normalizedQuery);
 
       return platformAllowed && queryAllowed;
     });
@@ -379,6 +496,27 @@ export function App() {
     });
   }
 
+  async function sendNativeMessage() {
+    const text = nativeMessage.trim();
+    const username = nativeUsername.trim() || "viewer";
+    if (!text) {
+      return;
+    }
+
+    const response = await fetch("/api/native-chat/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username,
+        message: text
+      })
+    });
+
+    if (response.ok) {
+      setNativeMessage("");
+    }
+  }
+
   function togglePlatform(platform: Platform) {
     setEnabledPlatforms((current) => ({
       ...current,
@@ -408,9 +546,9 @@ export function App() {
 
   function cycleSettingsPlatform(direction: -1 | 1) {
     setActiveSettingsPlatform((current) => {
-      const currentIndex = platformOrder.indexOf(current);
-      const nextIndex = (currentIndex + direction + platformOrder.length) % platformOrder.length;
-      return platformOrder[nextIndex];
+      const currentIndex = settingsPlatformOrder.indexOf(current);
+      const nextIndex = (currentIndex + direction + settingsPlatformOrder.length) % settingsPlatformOrder.length;
+      return settingsPlatformOrder[nextIndex];
     });
   }
 
@@ -557,6 +695,13 @@ export function App() {
     await loadHealth();
   }
 
+  async function removeXLiveChatTarget(targetId: string) {
+    setSettingsMessage("Stopping X live chat target...");
+    const response = await fetch(`/api/integrations/x/livechat/targets/${encodeURIComponent(targetId)}`, { method: "DELETE" });
+    setSettingsMessage(response.ok ? "X live chat target stopped." : await responseErrorMessage(response, "X target stop failed."));
+    await loadHealth();
+  }
+
   const twitchStatus = health?.integrations.statuses.twitch;
   const kickStatus = health?.integrations.statuses.kick;
   const xStatus = health?.integrations.statuses.x;
@@ -567,6 +712,79 @@ export function App() {
       ? "OAuth token"
       : "App token";
   const xRuleCount = health?.integrations.x.rules?.length ?? 0;
+  const activeXLiveTargets = health?.integrations.x.liveChatCapture?.activeTargets ?? [];
+
+  if (isPublicDashboard) {
+    const dashboardTitle = publicConfig?.title ?? "MarketBubble Live";
+    const streamEmbedUrl = publicConfig?.streamEmbedUrl ?? null;
+    const streamWatchUrl =
+      publicConfig?.streamWatchUrl ??
+      sourceSnapshot.sources.find((source) => source.status === "live" && source.sourceUrl)?.sourceUrl ??
+      null;
+
+    return (
+      <main className="public-shell">
+        <header className="public-header">
+          <div className="public-brand">
+            <Radio size={16} aria-hidden="true" />
+            <h1>{dashboardTitle}</h1>
+          </div>
+          <div className="public-header-actions">
+            <ViewerSummary snapshot={sourceSnapshot} />
+            <ConnectionPill state={connectionState} />
+          </div>
+        </header>
+
+        <section className="public-live-grid">
+          <section className="stream-stage" aria-label="Live stream">
+            {streamEmbedUrl ? (
+              <iframe src={streamEmbedUrl} title={dashboardTitle} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen />
+            ) : (
+              <div className="stream-placeholder">
+                <Radio size={30} aria-hidden="true" />
+                <strong>{dashboardTitle}</strong>
+                {streamWatchUrl ? (
+                  <a className="stream-link" href={streamWatchUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={15} aria-hidden="true" />
+                    Open stream
+                  </a>
+                ) : (
+                  <span>Stream embed unavailable</span>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="public-chat-panel" aria-label="Combined live chat">
+            <div className="public-chat-header">
+              <div>
+                <MessageCircle size={16} aria-hidden="true" />
+                <strong>Shared Chat</strong>
+              </div>
+              <span>{messages.length} messages</span>
+            </div>
+            <div className="public-message-list">
+              <Virtuoso data={messages} followOutput="smooth" itemContent={(_, message) => <MessageRow message={message} />} />
+            </div>
+            <form
+              className="native-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void sendNativeMessage();
+              }}
+            >
+              <input value={nativeUsername} onChange={(event) => setNativeUsername(event.target.value)} aria-label="Native chat username" />
+              <input value={nativeMessage} onChange={(event) => setNativeMessage(event.target.value)} aria-label="Native chat message" />
+              <button className="primary-button" type="submit">
+                <Send size={15} aria-hidden="true" />
+                Send
+              </button>
+            </form>
+          </section>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -583,7 +801,7 @@ export function App() {
           </div>
 
           <div className="source-bar" aria-label="Platform filters">
-            {(Object.keys(enabledPlatforms) as Platform[]).map((platform) => (
+            {platformOrder.map((platform) => (
               <button
                 className={`source-chip source-chip-${platform} ${enabledPlatforms[platform] ? "source-chip-active" : ""}`}
                 type="button"
@@ -609,6 +827,7 @@ export function App() {
                 </button>
               ) : null}
             </label>
+            <ViewerSummary snapshot={sourceSnapshot} />
             <ConnectionPill state={connectionState} />
             <button
               className={`icon-button ${paused ? "icon-button-active" : ""}`}
@@ -649,7 +868,7 @@ export function App() {
                   <ChevronLeft size={16} aria-hidden="true" />
                 </button>
                 <div className="settings-tabs" role="tablist" aria-label="Settings platforms">
-                  {platformOrder.map((platform) => (
+                  {settingsPlatformOrder.map((platform) => (
                     <button
                       className={`settings-tab ${activeSettingsPlatform === platform ? "settings-tab-active" : ""}`}
                       type="button"
@@ -869,7 +1088,27 @@ export function App() {
                 <span>{health?.integrations.x.liveChatCapture?.running ? "Live chat running" : "Live chat stopped"}</span>
                 <span>{health?.integrations.x.liveChatCapture?.chromeFound ? "Chrome found" : "Chrome missing"}</span>
                 <span>{health?.integrations.x.liveCapture?.tokenRequired ? "Capture token on" : "Capture bridge ready"}</span>
+                <span>{activeXLiveTargets.length} livechat targets</span>
                 <span>{xRuleCount} rules</span>
+              </div>
+              <div className="settings-target-list" aria-label="Active X livechat targets">
+                {activeXLiveTargets.length > 0 ? (
+                  activeXLiveTargets.map((target) => (
+                    <span className="settings-target-chip" key={target.id}>
+                      <span>{target.channelName}</span>
+                      <button
+                        className="ghost-icon"
+                        type="button"
+                        title={`Stop ${target.channelName}`}
+                        onClick={() => void removeXLiveChatTarget(target.id)}
+                      >
+                        <X size={13} aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span className="settings-target-empty">No active X livechat targets</span>
+                )}
               </div>
               <p className="settings-url">{health?.integrations.x.liveCapture?.scriptPath ?? "/x-live-capture.js"}</p>
               <p>{xStatus?.detail ?? "X uses Filtered Stream rules for public posts."}</p>
@@ -923,6 +1162,7 @@ export function App() {
                 <option value="twitch">Twitch</option>
                 <option value="kick">Kick</option>
                 <option value="x">X</option>
+                <option value="marketbubble">MarketBubble</option>
               </select>
               <input value={mockText} onChange={(event) => setMockText(event.target.value)} aria-label="Mock message" />
               <button className="primary-button" type="submit">

@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { websocketEnvelopeSchema, type ChatMessage, type Platform } from "../shared/chat";
+import { websocketEnvelopeSchema, type ChatMessage, type Platform, type ViewerSnapshot } from "../shared/chat";
 
 type ConnectionState = "connecting" | "connected" | "disconnected";
+type StreamSurface = "admin" | "viewer";
 
 const DEFAULT_CLIENT_MESSAGE_LIMIT = 500;
+const emptyViewerSnapshot: ViewerSnapshot = {
+  sources: [],
+  totalKnownViewers: 0,
+  unknownSourceCount: 0,
+  updatedAt: new Date(0).toISOString()
+};
 
 function trimMessages(messages: ChatMessage[], limit: number) {
   return messages.length > limit ? messages.slice(messages.length - limit) : messages;
 }
 
-export function useChatStream() {
+export function useChatStream(surface: StreamSurface = "admin") {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sourceSnapshot, setSourceSnapshot] = useState<ViewerSnapshot>(emptyViewerSnapshot);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const reconnectTimer = useRef<number | null>(null);
   const maxMessages = useRef(DEFAULT_CLIENT_MESSAGE_LIMIT);
@@ -18,7 +26,7 @@ export function useChatStream() {
   const connect = useCallback(() => {
     setConnectionState("connecting");
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+    const socket = new WebSocket(`${protocol}://${window.location.host}/ws?surface=${surface}`);
 
     socket.addEventListener("open", () => {
       setConnectionState("connected");
@@ -42,6 +50,10 @@ export function useChatStream() {
           trimMessages([...current.filter((message) => message.id !== incoming.id), incoming], maxMessages.current)
         );
       }
+
+      if (parsed.data.type === "sources") {
+        setSourceSnapshot(parsed.data.snapshot);
+      }
     });
 
     socket.addEventListener("close", () => {
@@ -54,7 +66,7 @@ export function useChatStream() {
     });
 
     return socket;
-  }, []);
+  }, [surface]);
 
   useEffect(() => {
     const socket = connect();
@@ -74,13 +86,14 @@ export function useChatStream() {
         accumulator[message.platform] += 1;
         return accumulator;
       },
-      { total: 0, twitch: 0, kick: 0, x: 0 } satisfies Record<Platform | "total", number>
+      { total: 0, twitch: 0, kick: 0, x: 0, marketbubble: 0 } satisfies Record<Platform | "total", number>
     );
   }, [messages]);
 
   return {
     messages,
     setMessages,
+    sourceSnapshot,
     connectionState,
     counts
   };

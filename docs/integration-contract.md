@@ -1,6 +1,6 @@
 # Integration Contract
 
-Last updated: 2026-06-09
+Last updated: 2026-06-10
 
 ## Unified Message Shape
 
@@ -9,7 +9,7 @@ All platform adapters emit a normalized `ChatMessage`:
 ```ts
 type ChatMessage = {
   id: string;
-  platform: "twitch" | "kick" | "x";
+  platform: "twitch" | "kick" | "x" | "marketbubble";
   sourceKind: "chat" | "public_post";
   platformMessageId: string;
   platformUserId: string | null;
@@ -17,6 +17,9 @@ type ChatMessage = {
   displayName: string | null;
   channelId: string | null;
   channelName: string | null;
+  sourceId: string | null;
+  sourceLabel: string | null;
+  sourceUrl: string | null;
   message: string;
   fragments: MessageFragment[];
   badges: MessageBadge[];
@@ -27,6 +30,30 @@ type ChatMessage = {
   raw?: unknown;
 };
 ```
+
+The source fields identify the stream or broadcaster origin independently of the chatter identity. They are used by compact chat labels and the combined viewer-count breakdown.
+
+## Viewer Source Shape
+
+The server also publishes source snapshots:
+
+```ts
+type ViewerSource = {
+  id: string;
+  platform: "twitch" | "kick" | "x" | "marketbubble";
+  label: string;
+  channelId: string | null;
+  channelName: string | null;
+  sourceUrl: string | null;
+  viewerCount: number | null;
+  chattersCount: number | null;
+  status: "unknown" | "offline" | "live" | "connected" | "error";
+  detail: string | null;
+  updatedAt: string;
+};
+```
+
+`viewerCount: null` means the source is connected but does not have a reliable numeric count yet.
 
 ## Ingress Endpoints
 
@@ -56,9 +83,28 @@ Development-only normalized mock ingestion.
 }
 ```
 
+### `POST /api/native-chat/messages`
+
+Publishes a first-party MarketBubble native chat message into the same normalized chat stream.
+
+```json
+{
+  "username": "viewer_name",
+  "message": "hello from MarketBubble"
+}
+```
+
 ### `GET /api/messages`
 
 Returns the recent normalized message snapshot.
+
+### `GET /api/sources`
+
+Returns the current viewer/source snapshot, including combined known viewer count.
+
+### `GET /api/public/config`
+
+Returns public dashboard configuration for `/live`, including the configured stream embed URL and current source snapshot.
 
 ### `GET /api/health`
 
@@ -160,7 +206,11 @@ Requires Chrome or Edge to be installed, or `X_LIVE_CHAT_CHROME_PATH` to point t
 
 ### `POST /api/integrations/x/livechat/stop`
 
-Stops the X livechat browser capture worker.
+Stops all active X livechat browser capture workers.
+
+### `DELETE /api/integrations/x/livechat/targets/:targetId`
+
+Stops one active X livechat browser capture worker. Target IDs are returned in `liveChatCapture.activeTargets` from health/config responses.
 
 ### `POST /api/capture/x-live`
 

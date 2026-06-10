@@ -1,6 +1,6 @@
 # Development Roadmap
 
-Last updated: 2026-06-05
+Last updated: 2026-06-10
 
 ## Phase 1: Runnable MVP Foundation
 
@@ -19,7 +19,25 @@ Last updated: 2026-06-05
 - Store credentials securely.
 - Add integration health states and reconnect telemetry.
 
-## Phase 3: Persistence and Operations
+## Phase 3: MarketBubble Live Hub
+
+- Add MarketBubble public dashboard at `/live`.
+- Add native MarketBubble chat ingestion.
+- Add source metadata and combined viewer-count snapshots.
+- Poll Twitch and Kick viewer counts.
+- Track multiple X livechat capture targets.
+- Document production stream embed expectations.
+
+## Phase 4: Public Hub Hardening
+
+- Add public chat rate limiting and abuse controls.
+- Add account-backed native chat identity.
+- Add moderation controls for native MarketBubble messages.
+- Add source-level visibility controls for public dashboard sessions.
+- Add reliable X viewer-count capture if technically feasible.
+- Add event/session configuration for multiple named MarketBubble broadcasts.
+
+## Phase 5: Persistence and Operations
 
 - Add PostgreSQL for streams, connected accounts, and retained chat history.
 - Add Redis for buffering, dedupe, fan-out, and worker coordination.
@@ -27,7 +45,7 @@ Last updated: 2026-06-05
 - Add replay of recent messages on client reconnect.
 - Add deployment-ready Docker Compose.
 
-## Phase 4: Moderation and Production Features
+## Phase 6: Moderation and Production Features
 
 - Normalize deletion, timeout, ban, and clear-chat events.
 - Add per-platform display options for emotes and badges.
@@ -35,7 +53,7 @@ Last updated: 2026-06-05
 - Add retention controls.
 - Add audit trails for integration changes.
 
-## Phase 5: Scale and Polish
+## Phase 7: Scale and Polish
 
 - Split ingestion workers from the web app if message volume requires it.
 - Add queue-based retry and dead-letter handling.

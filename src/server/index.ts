@@ -14,13 +14,14 @@ import { normalizeTwitchChatMessage } from "./adapters/twitch";
 import { normalizeXFilteredStreamPost, normalizeXLiveCaptureMessage } from "./adapters/x";
 import { createDemoMessage } from "./demo";
 import { ChatHub } from "./hub";
+import { SourceHub } from "./sourceHub";
 import { verifyKickSignature, verifyTwitchSignature, type RawBodyRequest } from "./security";
 import { subscribeKickChatWebhook } from "./workers/kickSubscriptions";
 import { IntegrationStatusStore } from "./workers/status";
 import { TwitchEventSubWorker } from "./workers/twitchEventSub";
 import { parseXRules, XFilteredStreamWorker } from "./workers/xFilteredStream";
 import { findChromeExecutable, XLiveChatCaptureWorker, xLiveChatChannelFromInput, xLiveChatUrlFromInput } from "./workers/xLiveChatCapture";
-import { chatMessageSchema, makeMessageId, platformSchema, textFragment, type ChatMessage } from "../shared/chat";
+import { chatMessageSchema, makeMessageId, platformSchema, textFragment, type ChatMessage, type Platform } from "../shared/chat";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "../..");
@@ -38,6 +39,11 @@ const xLiveChatProfilePath = process.env.X_LIVE_CHAT_PROFILE_DIR
 const port = Number(process.env.PORT ?? 4200);
 const isProduction = process.env.NODE_ENV === "production";
 const messageHistoryLimit = parsePositiveIntegerEnv("CHAT_HISTORY_LIMIT", 500);
+const viewerPollMs = parsePositiveIntegerEnv("VIEWER_POLL_MS", 30000);
+const marketBubbleSourceId = "marketbubble:native-live";
+const marketBubbleSourceLabel = process.env.MARKETBUBBLE_CHAT_LABEL ?? "MarketBubble";
+const publicStreamEmbedUrl = process.env.MARKETBUBBLE_STREAM_EMBED_URL ?? "";
+const publicStreamWatchUrl = process.env.MARKETBUBBLE_STREAM_WATCH_URL ?? "";
 const defaultXLiveCaptureAllowedOrigins = [
   "https://x.com",
   "https://twitter.com",
@@ -65,15 +71,22 @@ const demoEnabled =
 
 const app = express();
 const hub = new ChatHub(messageHistoryLimit);
+const sourceHub = new SourceHub();
 const statuses = new IntegrationStatusStore();
 const httpServer = createHttpServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+const publicViewerSockets = new Set<unknown>();
 
 const mockMessageSchema = z.object({
   platform: platformSchema.default("twitch"),
   username: z.string().min(1).default("localtester"),
   message: z.string().min(1),
   channelName: z.string().min(1).optional()
+});
+
+const nativeChatSchema = z.object({
+  username: z.string().trim().min(1).max(32).default("marketbubble-viewer"),
+  message: z.string().trim().min(1).max(500)
 });
 
 const kickSubscribeSchema = z.object({
@@ -158,7 +171,10 @@ function publish(message: ChatMessage | null) {
     return false;
   }
 
-  return hub.add(message);
+  const enriched = enrichMessageSource(message);
+  const added = hub.add(enriched);
+  upsertSourceFromMessage(enriched);
+  return added;
 }
 
 function sendError(res: Response, status: number, message: string) {
@@ -217,6 +233,118 @@ function escapeHtml(value: string) {
 
 function isEnabled(name: string) {
   return process.env[name] === "true";
+}
+
+const platformLabels: Record<Platform, string> = {
+  twitch: "Twitch",
+  kick: "Kick",
+  x: "X",
+  marketbubble: "MarketBubble"
+};
+
+function sourceKey(value: string | null | undefined) {
+  return (value ?? "unknown")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "unknown";
+}
+
+function absoluteUrlOrNull(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function sourceUrlForMessage(message: ChatMessage) {
+  const explicitUrl = absoluteUrlOrNull(message.sourceUrl);
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  if (message.platform === "twitch") {
+    const login = message.channelName && !/^\d+$/.test(message.channelName) ? message.channelName : null;
+    return login ? `https://www.twitch.tv/${login}` : null;
+  }
+
+  if (message.platform === "kick") {
+    const slug = message.channelName && !/^\d+$/.test(message.channelName) ? message.channelName : null;
+    return slug ? `https://kick.com/${slug}` : null;
+  }
+
+  if (message.platform === "x") {
+    const channelUrl = absoluteUrlOrNull(message.channelId);
+    if (channelUrl) {
+      return channelUrl;
+    }
+
+    const account = message.channelName?.replace(/^@/, "").replace(/\s+livechat$/i, "");
+    return account ? `https://x.com/${account}/livechat` : null;
+  }
+
+  return absoluteUrlOrNull(publicStreamWatchUrl);
+}
+
+function sourceIdForPlatform(platform: Platform, channelId: string | null | undefined, channelName: string | null | undefined, fallback: string) {
+  return platform === "marketbubble" ? marketBubbleSourceId : `${platform}:${sourceKey(channelId ?? channelName ?? fallback)}`;
+}
+
+function enrichMessageSource(message: ChatMessage) {
+  const parsed = chatMessageSchema.parse(message);
+  const sourceLabel =
+    parsed.sourceLabel ??
+    (parsed.platform === "marketbubble" ? marketBubbleSourceLabel : parsed.channelName) ??
+    platformLabels[parsed.platform];
+  const sourceId =
+    parsed.sourceId ??
+    sourceIdForPlatform(parsed.platform, parsed.channelId, parsed.channelName, sourceLabel);
+  const sourceUrl = sourceUrlForMessage({ ...parsed, sourceLabel, sourceId });
+
+  return chatMessageSchema.parse({
+    ...parsed,
+    sourceId,
+    sourceLabel,
+    sourceUrl
+  });
+}
+
+function upsertSourceFromMessage(message: ChatMessage) {
+  if (!message.sourceId || !message.sourceLabel) {
+    return;
+  }
+
+  sourceHub.upsert({
+    id: message.sourceId,
+    platform: message.platform,
+    label: message.sourceLabel,
+    channelId: message.channelId,
+    channelName: message.channelName,
+    sourceUrl: message.sourceUrl,
+    status: message.platform === "marketbubble" ? "live" : "connected"
+  });
+}
+
+function updateMarketBubbleViewerSource() {
+  sourceHub.upsert({
+    id: marketBubbleSourceId,
+    platform: "marketbubble",
+    label: marketBubbleSourceLabel,
+    channelId: "marketbubble-native-live",
+    channelName: marketBubbleSourceLabel,
+    sourceUrl: absoluteUrlOrNull(publicStreamWatchUrl),
+    viewerCount: publicViewerSockets.size,
+    status: "live",
+    detail: "Native dashboard viewers"
+  });
 }
 
 function parsePositiveIntegerEnv(name: string, fallback: number) {
@@ -388,7 +516,15 @@ let kickRuntimeConfig: KickRuntimeConfig = {
 };
 let twitchWorker: TwitchEventSubWorker | null = null;
 let xWorker: XFilteredStreamWorker | null = null;
-let xLiveChatWorker: XLiveChatCaptureWorker | null = null;
+const xLiveChatWorkers = new Map<
+  string,
+  {
+    worker: XLiveChatCaptureWorker;
+    targetUrl: string;
+    channelName: string;
+    startedAt: string;
+  }
+>();
 let demoInterval: NodeJS.Timeout | null = null;
 const twitchOAuthStates = new Map<string, { createdAt: number }>();
 const kickOAuthStates = new Map<string, { createdAt: number; codeVerifier: string }>();
@@ -736,6 +872,16 @@ function upsertTwitchTrackedBroadcaster(target: { id: string; login: string | nu
     saveStoredTwitchSession(session);
   }
 
+  sourceHub.upsert({
+    id: sourceIdForPlatform("twitch", nextTarget.userId, nextTarget.login ?? nextTarget.displayName, "Twitch"),
+    platform: "twitch",
+    label: nextTarget.displayName ?? nextTarget.login ?? nextTarget.userId,
+    channelId: nextTarget.userId,
+    channelName: nextTarget.login ?? nextTarget.displayName,
+    sourceUrl: nextTarget.login ? `https://www.twitch.tv/${nextTarget.login}` : null,
+    status: "unknown"
+  });
+
   return nextTarget;
 }
 
@@ -753,6 +899,7 @@ function removeTwitchTrackedBroadcaster(target: string) {
     ...twitchRuntimeConfig,
     trackedBroadcasters: twitchRuntimeConfig.trackedBroadcasters.filter((tracked) => tracked.userId !== removed.userId)
   };
+  sourceHub.remove(sourceIdForPlatform("twitch", removed.userId, removed.login ?? removed.displayName, "Twitch"));
 
   const primaryTarget = twitchRuntimeConfig.trackedBroadcasters.at(-1) ?? null;
   twitchRuntimeConfig = {
@@ -1107,6 +1254,16 @@ function upsertKickTrackedBroadcaster(
     saveStoredKickSession(session);
   }
 
+  sourceHub.upsert({
+    id: sourceIdForPlatform("kick", nextTarget.userId, nextTarget.slug ?? nextTarget.name, "Kick"),
+    platform: "kick",
+    label: nextTarget.name ?? nextTarget.slug ?? nextTarget.userId,
+    channelId: nextTarget.userId,
+    channelName: nextTarget.slug ?? nextTarget.name,
+    sourceUrl: nextTarget.slug ? `https://kick.com/${nextTarget.slug}` : null,
+    status: "unknown"
+  });
+
   return nextTarget;
 }
 
@@ -1124,6 +1281,7 @@ function removeKickTrackedBroadcaster(target: string) {
     ...kickRuntimeConfig,
     trackedBroadcasters: kickRuntimeConfig.trackedBroadcasters.filter((tracked) => tracked.userId !== removed.userId)
   };
+  sourceHub.remove(sourceIdForPlatform("kick", removed.userId, removed.slug ?? removed.name, "Kick"));
 
   const session = currentStoredKickSession();
   if (session) {
@@ -1228,16 +1386,24 @@ function publicKickConfig() {
 }
 
 function publicXConfig() {
+  const activeTargets = Array.from(xLiveChatWorkers.entries()).map(([id, target]) => ({
+    id,
+    targetUrl: target.targetUrl,
+    channelName: target.channelName,
+    startedAt: target.startedAt
+  }));
+
   return {
     mode: "filtered-stream-public-posts",
     autoStartEnabled: isEnabled("X_STREAM_ENABLED"),
     streamEnabled: Boolean(xWorker),
     configured: Boolean(xRuntimeConfig.bearerToken),
     liveChatCapture: {
-      running: Boolean(xLiveChatWorker),
+      running: xLiveChatWorkers.size > 0,
       profilePath: xLiveChatProfilePath,
       debugPort: parsePositiveIntegerEnv("X_LIVE_CHAT_DEBUG_PORT", 9223),
-      chromeFound: Boolean(findChromeExecutable(process.env.X_LIVE_CHAT_CHROME_PATH))
+      chromeFound: Boolean(findChromeExecutable(process.env.X_LIVE_CHAT_CHROME_PATH)),
+      activeTargets
     },
     liveCapture: {
       endpoint: "/api/capture/x-live",
@@ -1249,6 +1415,171 @@ function publicXConfig() {
     rawRules: xRuntimeConfig.rawRules,
     rules: xRuntimeConfig.rules
   };
+}
+
+function publicDashboardConfig(req?: Request) {
+  const host = req?.get("host") ?? `localhost:${port}`;
+  const protocol = req?.protocol ?? "http";
+
+  return {
+    title: process.env.MARKETBUBBLE_DASHBOARD_TITLE ?? "MarketBubble Live",
+    nativeChatLabel: marketBubbleSourceLabel,
+    streamEmbedUrl: absoluteUrlOrNull(publicStreamEmbedUrl),
+    streamWatchUrl: absoluteUrlOrNull(publicStreamWatchUrl),
+    publicUrl: `${protocol}://${host}/live`
+  };
+}
+
+async function refreshTwitchViewerSources() {
+  for (const tracked of twitchRuntimeConfig.trackedBroadcasters) {
+    sourceHub.upsert({
+      id: sourceIdForPlatform("twitch", tracked.userId, tracked.login ?? tracked.displayName, "Twitch"),
+      platform: "twitch",
+      label: tracked.displayName ?? tracked.login ?? tracked.userId,
+      channelId: tracked.userId,
+      channelName: tracked.login ?? tracked.displayName,
+      sourceUrl: tracked.login ? `https://www.twitch.tv/${tracked.login}` : null,
+      status: "unknown"
+    });
+  }
+
+  if (!twitchRuntimeConfig.clientId || !twitchRuntimeConfig.userAccessToken || twitchRuntimeConfig.trackedBroadcasters.length === 0) {
+    return;
+  }
+
+  const tokenResult = await ensureTwitchTokenIsUsable();
+  if (!tokenResult.ok || !twitchRuntimeConfig.userAccessToken) {
+    return;
+  }
+
+  const query = new URLSearchParams();
+  for (const tracked of twitchRuntimeConfig.trackedBroadcasters) {
+    query.append("user_id", tracked.userId);
+  }
+
+  const response = await fetch(`https://api.twitch.tv/helix/streams?${query.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${twitchRuntimeConfig.userAccessToken}`,
+      "Client-Id": twitchRuntimeConfig.clientId
+    }
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Twitch viewer lookup failed with ${response.status}: ${body}`);
+  }
+
+  const body = (await response.json()) as {
+    data?: Array<{
+      user_id: string;
+      user_login: string;
+      user_name: string;
+      title?: string;
+      type?: string;
+      viewer_count?: number;
+    }>;
+  };
+  const streamsByUserId = new Map((body.data ?? []).map((stream) => [stream.user_id, stream]));
+
+  for (const tracked of twitchRuntimeConfig.trackedBroadcasters) {
+    const stream = streamsByUserId.get(tracked.userId);
+    const label = stream?.user_name ?? tracked.displayName ?? tracked.login ?? tracked.userId;
+    const login = stream?.user_login ?? tracked.login;
+    sourceHub.upsert({
+      id: sourceIdForPlatform("twitch", tracked.userId, login ?? label, label),
+      platform: "twitch",
+      label,
+      channelId: tracked.userId,
+      channelName: login ?? label,
+      sourceUrl: login ? `https://www.twitch.tv/${login}` : null,
+      viewerCount: stream?.viewer_count ?? 0,
+      status: stream?.type === "live" ? "live" : "offline",
+      detail: stream?.title ?? null
+    });
+  }
+}
+
+async function refreshKickViewerSources() {
+  for (const tracked of kickRuntimeConfig.trackedBroadcasters) {
+    sourceHub.upsert({
+      id: sourceIdForPlatform("kick", tracked.userId, tracked.slug ?? tracked.name, "Kick"),
+      platform: "kick",
+      label: tracked.name ?? tracked.slug ?? tracked.userId,
+      channelId: tracked.userId,
+      channelName: tracked.slug ?? tracked.name,
+      sourceUrl: tracked.slug ? `https://kick.com/${tracked.slug}` : null,
+      status: "unknown"
+    });
+  }
+
+  if (kickRuntimeConfig.trackedBroadcasters.length === 0) {
+    return;
+  }
+
+  let accessToken: string | null = null;
+  if (kickRuntimeConfig.accessToken) {
+    const tokenResult = await ensureKickTokenIsUsable();
+    if (tokenResult.ok) {
+      accessToken = kickRuntimeConfig.accessToken;
+    }
+  }
+  accessToken = accessToken ?? (await getKickAppAccessToken());
+  const query = new URLSearchParams();
+  for (const tracked of kickRuntimeConfig.trackedBroadcasters) {
+    query.append("broadcaster_user_id", tracked.userId);
+  }
+
+  const response = await fetch(`https://api.kick.com/public/v1/livestreams?${query.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Kick viewer lookup failed with ${response.status}: ${body}`);
+  }
+
+  const body = (await response.json()) as {
+    data?: Array<{
+      broadcaster_user_id?: number | string;
+      slug?: string;
+      stream_title?: string;
+      viewer_count?: number;
+    }>;
+  };
+  const streamsByUserId = new Map((body.data ?? []).map((stream) => [String(stream.broadcaster_user_id), stream]));
+
+  for (const tracked of kickRuntimeConfig.trackedBroadcasters) {
+    const stream = streamsByUserId.get(tracked.userId);
+    const slug = stream?.slug ?? tracked.slug;
+    const label = tracked.name ?? slug ?? tracked.userId;
+    sourceHub.upsert({
+      id: sourceIdForPlatform("kick", tracked.userId, slug ?? label, label),
+      platform: "kick",
+      label,
+      channelId: tracked.userId,
+      channelName: slug ?? label,
+      sourceUrl: slug ? `https://kick.com/${slug}` : null,
+      viewerCount: stream?.viewer_count ?? 0,
+      status: stream ? "live" : "offline",
+      detail: stream?.stream_title ?? null
+    });
+  }
+}
+
+async function refreshViewerSources() {
+  updateMarketBubbleViewerSource();
+  const results = await Promise.allSettled([refreshTwitchViewerSources(), refreshKickViewerSources()]);
+  const [twitchResult, kickResult] = results;
+
+  if (twitchResult.status === "rejected") {
+    statuses.set("twitch", "error", `Twitch viewer count refresh failed: ${String(twitchResult.reason)}`);
+  }
+
+  if (kickResult.status === "rejected") {
+    statuses.set("kick", "error", `Kick viewer count refresh failed: ${String(kickResult.reason)}`);
+  }
 }
 
 function startOrRestartXWorker() {
@@ -1276,11 +1607,25 @@ function stopXWorker() {
 }
 
 function stopXLiveChatWorker() {
-  xLiveChatWorker?.stop();
-  xLiveChatWorker = null;
+  for (const [id, target] of xLiveChatWorkers.entries()) {
+    target.worker.stop();
+    sourceHub.remove(id);
+  }
+  xLiveChatWorkers.clear();
 }
 
-app.get("/api/health", (_req, res) => {
+function stopXLiveChatTarget(targetId: string) {
+  const target = xLiveChatWorkers.get(targetId);
+  if (!target) {
+    return null;
+  }
+
+  target.worker.stop();
+  xLiveChatWorkers.delete(targetId);
+  return target;
+}
+
+app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     configuration: {
@@ -1292,6 +1637,8 @@ app.get("/api/health", (_req, res) => {
     demoEnabled,
     messageCount: hub.size,
     messageHistoryLimit,
+    sources: sourceHub.snapshot(),
+    publicDashboard: publicDashboardConfig(req),
     integrations: {
       statuses: statuses.snapshot(),
       twitch: {
@@ -1303,6 +1650,17 @@ app.get("/api/health", (_req, res) => {
       kick: publicKickConfig(),
       x: publicXConfig()
     }
+  });
+});
+
+app.get("/api/sources", (_req, res) => {
+  res.json(sourceHub.snapshot());
+});
+
+app.get("/api/public/config", (req, res) => {
+  res.json({
+    dashboard: publicDashboardConfig(req),
+    sources: sourceHub.snapshot()
   });
 });
 
@@ -1351,6 +1709,40 @@ app.post("/api/mock/messages", (req, res) => {
 
   publish(message);
   res.status(201).json({ added: true, message });
+});
+
+app.post("/api/native-chat/messages", (req, res) => {
+  const parsed = nativeChatSchema.safeParse(req.body ?? {});
+
+  if (!parsed.success) {
+    return sendError(res, 400, "Invalid native chat message.");
+  }
+
+  const now = new Date().toISOString();
+  const platformMessageId = `native-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const message = chatMessageSchema.parse({
+    id: makeMessageId("marketbubble", platformMessageId),
+    platform: "marketbubble",
+    sourceKind: "chat",
+    platformMessageId,
+    platformUserId: parsed.data.username,
+    username: parsed.data.username,
+    displayName: parsed.data.username,
+    channelId: "marketbubble-native-live",
+    channelName: marketBubbleSourceLabel,
+    sourceId: marketBubbleSourceId,
+    sourceLabel: marketBubbleSourceLabel,
+    sourceUrl: absoluteUrlOrNull(publicStreamWatchUrl),
+    message: parsed.data.message,
+    fragments: [textFragment(parsed.data.message)],
+    badges: [{ label: "Native", type: "marketbubble-native", count: null }],
+    avatarUrl: null,
+    color: "#32d9c3",
+    sentAt: now,
+    receivedAt: now
+  });
+  const added = publish(message);
+  res.status(added ? 201 : 200).json({ added, message });
 });
 
 app.post("/api/webhooks/twitch/eventsub", (req: RawBodyRequest, res: Response) => {
@@ -1782,12 +2174,14 @@ app.post("/api/integrations/x/livechat/start", async (req, res) => {
     return sendError(res, 400, "Chrome or Edge was not found. Set X_LIVE_CHAT_CHROME_PATH to the browser executable.");
   }
 
+  let targetId: string | null = null;
   try {
     const targetUrl = xLiveChatUrlFromInput(input);
     const channelName = parsed.data.channelName ?? xLiveChatChannelFromInput(input);
-    stopXLiveChatWorker();
+    targetId = `x:${sourceKey(targetUrl)}`;
+    stopXLiveChatTarget(targetId);
     stopDemoMessages();
-    xLiveChatWorker = new XLiveChatCaptureWorker({
+    const worker = new XLiveChatCaptureWorker({
       targetUrl,
       channelName,
       chromePath,
@@ -1797,10 +2191,28 @@ app.post("/api/integrations/x/livechat/start", async (req, res) => {
       publish,
       statuses
     });
-    await xLiveChatWorker.start();
-    res.status(202).json({ started: true, targetUrl, x: publicXConfig() });
+    xLiveChatWorkers.set(targetId, {
+      worker,
+      targetUrl,
+      channelName,
+      startedAt: new Date().toISOString()
+    });
+    await worker.start();
+    sourceHub.upsert({
+      id: targetId,
+      platform: "x",
+      label: channelName,
+      channelId: targetUrl,
+      channelName,
+      sourceUrl: targetUrl,
+      status: "connected",
+      detail: "X livechat capture"
+    });
+    res.status(202).json({ started: true, targetId, targetUrl, x: publicXConfig() });
   } catch (error) {
-    xLiveChatWorker = null;
+    if (targetId) {
+      stopXLiveChatTarget(targetId);
+    }
     statuses.set("x", "error", `X livechat capture failed: ${String(error)}`);
     sendError(res, 502, "X livechat capture failed.");
   }
@@ -1809,6 +2221,17 @@ app.post("/api/integrations/x/livechat/start", async (req, res) => {
 app.post("/api/integrations/x/livechat/stop", (_req, res) => {
   stopXLiveChatWorker();
   res.json({ x: publicXConfig() });
+});
+
+app.delete("/api/integrations/x/livechat/targets/:targetId", (req, res) => {
+  const removed = stopXLiveChatTarget(req.params.targetId);
+  if (!removed) {
+    return sendError(res, 404, "X livechat target was not running.");
+  }
+
+  sourceHub.remove(req.params.targetId);
+  statuses.set("x", xLiveChatWorkers.size > 0 ? "connected" : "disabled", `Stopped X livechat capture for ${removed.channelName}.`);
+  res.json({ removed: { targetUrl: removed.targetUrl, channelName: removed.channelName }, x: publicXConfig() });
 });
 
 app.get("/api/integrations/twitch/config", (_req, res) => {
@@ -2071,9 +2494,17 @@ app.post("/api/mock/x-filtered-stream", (req, res) => {
   res.status(added ? 201 : 200).json({ added, message });
 });
 
-wss.on("connection", (socket) => {
+wss.on("connection", (socket, request) => {
+  const socketUrl = new URL(request.url ?? "/ws", `http://${request.headers.host ?? "localhost"}`);
+  const isPublicViewer = socketUrl.searchParams.get("surface") === "viewer";
+  if (isPublicViewer) {
+    publicViewerSockets.add(socket);
+    updateMarketBubbleViewerSource();
+  }
+
   socket.send(JSON.stringify({ type: "status", status: "connected" }));
   socket.send(JSON.stringify({ type: "snapshot", messages: hub.snapshot(), maxMessages: messageHistoryLimit }));
+  socket.send(JSON.stringify({ type: "sources", snapshot: sourceHub.snapshot() }));
 
   const unsubscribe = hub.subscribe((message) => {
     if (socket.readyState === socket.OPEN) {
@@ -2081,7 +2512,20 @@ wss.on("connection", (socket) => {
     }
   });
 
-  socket.on("close", unsubscribe);
+  const unsubscribeSources = sourceHub.subscribe((snapshot) => {
+    if (socket.readyState === socket.OPEN) {
+      socket.send(JSON.stringify({ type: "sources", snapshot }));
+    }
+  });
+
+  socket.on("close", () => {
+    unsubscribe();
+    unsubscribeSources();
+    if (isPublicViewer) {
+      publicViewerSockets.delete(socket);
+      updateMarketBubbleViewerSource();
+    }
+  });
 });
 
 if (demoEnabled) {
@@ -2160,6 +2604,17 @@ async function startRealIngestionWorkers() {
 
 await startRealIngestionWorkers();
 
+refreshViewerSources().catch((error) => {
+  console.warn(`Viewer refresh will retry: ${String(error)}`);
+});
+
+const viewerRefreshTimer = setInterval(() => {
+  refreshViewerSources().catch((error) => {
+    console.warn(`Viewer refresh will retry: ${String(error)}`);
+  });
+}, viewerPollMs);
+viewerRefreshTimer.unref?.();
+
 const twitchValidationTimer = setInterval(() => {
   if (!twitchRuntimeConfig.userAccessToken) {
     return;
@@ -2190,11 +2645,12 @@ const kickValidationTimer = setInterval(() => {
 kickValidationTimer.unref?.();
 
 process.once("SIGINT", () => {
+  clearInterval(viewerRefreshTimer);
   clearInterval(twitchValidationTimer);
   clearInterval(kickValidationTimer);
   twitchWorker?.stop();
   xWorker?.stop();
-  xLiveChatWorker?.stop();
+  stopXLiveChatWorker();
   for (const worker of workers) {
     worker.stop();
   }
@@ -2202,11 +2658,12 @@ process.once("SIGINT", () => {
 });
 
 process.once("SIGTERM", () => {
+  clearInterval(viewerRefreshTimer);
   clearInterval(twitchValidationTimer);
   clearInterval(kickValidationTimer);
   twitchWorker?.stop();
   xWorker?.stop();
-  xLiveChatWorker?.stop();
+  stopXLiveChatWorker();
   for (const worker of workers) {
     worker.stop();
   }

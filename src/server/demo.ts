@@ -59,6 +59,16 @@ const samples: Array<{
     message: "Just got here. What did I miss?",
     color: "#facc15",
     badges: []
+  },
+  {
+    platform: "marketbubble",
+    sourceKind: "chat",
+    username: "nativefan",
+    displayName: "nativefan",
+    channelName: "MarketBubble",
+    message: "The shared chat makes this feel like one room.",
+    color: "#32d9c3",
+    badges: [{ label: "Native", type: "marketbubble-native", count: null }]
   }
 ];
 

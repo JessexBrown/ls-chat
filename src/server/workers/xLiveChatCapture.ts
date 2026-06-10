@@ -359,14 +359,14 @@ export class XLiveChatCaptureWorker {
   private async waitForTarget() {
     const deadline = Date.now() + 30000;
     let lastTargets: CdpTarget[] = [];
+    const normalizedTargetUrl = this.normalizeTargetUrl(this.options.targetUrl);
 
     while (Date.now() < deadline) {
       const targets = await this.listTargets().catch(() => []);
       lastTargets = targets;
-      const matchingTarget =
-        targets.find((target) => target.type === "page" && target.url === this.options.targetUrl) ??
-        targets.find((target) => target.type === "page" && target.url.includes("/livechat")) ??
-        targets.find((target) => target.type === "page" && target.url.includes("/i/broadcasts/"));
+      const matchingTarget = targets.find(
+        (target) => target.type === "page" && this.normalizeTargetUrl(target.url) === normalizedTargetUrl
+      );
 
       if (matchingTarget?.webSocketDebuggerUrl) {
         return matchingTarget;
@@ -381,6 +381,16 @@ export class XLiveChatCaptureWorker {
     }
 
     throw new Error(`Unable to find Chrome page target. Found ${lastTargets.length} target(s).`);
+  }
+
+  private normalizeTargetUrl(value: string) {
+    try {
+      const url = new URL(value);
+      url.hash = "";
+      return url.toString().replace(/\/$/, "");
+    } catch {
+      return value.replace(/\/$/, "");
+    }
   }
 
   private async openTarget() {
