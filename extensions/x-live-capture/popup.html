@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>LS Chat X Capture</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>LS Chat X Capture</strong>
+        <span id="state">Ready</span>
+      </header>
+
+      <label>
+        <span>Endpoint</span>
+        <input id="endpoint" value="http://localhost:4200/api/capture/x-live" />
+      </label>
+
+      <label>
+        <span>Channel</span>
+        <input id="channelName" placeholder="X Live Broadcast" />
+      </label>
+
+      <label>
+        <span>Token</span>
+        <input id="token" type="password" placeholder="optional" />
+      </label>
+
+      <div class="actions">
+        <button id="start" type="button">Start</button>
+        <button id="select" type="button">Select Area</button>
+        <button id="stop" type="button">Stop</button>
+      </div>
+
+      <p id="status">Open an X broadcast, then click Start.</p>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

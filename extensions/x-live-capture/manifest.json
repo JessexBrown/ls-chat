@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "LS Chat X Live Capture",
+  "description": "Capture visible X broadcast chat messages and forward them to a local LS Chat server.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LS Chat X Capture"
+  },
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://mobile.x.com/*",
+    "http://localhost:4200/*",
+    "http://127.0.0.1:4200/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*", "https://mobile.x.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
