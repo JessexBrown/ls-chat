@@ -55,11 +55,14 @@ The current implementation adds:
 - a `ViewerSnapshot` WebSocket envelope
 - source snapshot API at `/api/sources`
 - public dashboard config at `/api/public/config`
+- persisted Live Session config at `/api/live-session`
 - native chat publishing at `/api/native-chat/messages`
 - public dashboard route at `/live`
 - MarketBubble platform support
 - Twitch/Kick viewer-count polling foundation
 - multiple simultaneous X livechat capture targets
+
+Live Session settings are stored in `LIVE_SESSION_FILE`, defaulting to `.data/live-session.json`. Environment variables still provide first-boot defaults for dashboard title, native chat label, and stream URLs.
 
 ## Open Questions
 

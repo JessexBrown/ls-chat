@@ -14,6 +14,7 @@ import { normalizeTwitchChatMessage } from "./adapters/twitch";
 import { normalizeXFilteredStreamPost, normalizeXLiveCaptureMessage } from "./adapters/x";
 import { createDemoMessage } from "./demo";
 import { ChatHub } from "./hub";
+import { LiveSessionStore, liveSessionUpdateSchema } from "./liveSession";
 import { SourceHub } from "./sourceHub";
 import { verifyKickSignature, verifyTwitchSignature, type RawBodyRequest } from "./security";
 import { subscribeKickChatWebhook } from "./workers/kickSubscriptions";
@@ -33,6 +34,9 @@ const twitchSessionPath = process.env.TWITCH_SESSION_FILE
 const kickSessionPath = process.env.KICK_SESSION_FILE
   ? path.resolve(projectRoot, process.env.KICK_SESSION_FILE)
   : path.join(projectRoot, ".data", "kick-session.json");
+const liveSessionPath = process.env.LIVE_SESSION_FILE
+  ? path.resolve(projectRoot, process.env.LIVE_SESSION_FILE)
+  : path.join(projectRoot, ".data", "live-session.json");
 const xLiveChatProfilePath = process.env.X_LIVE_CHAT_PROFILE_DIR
   ? path.resolve(projectRoot, process.env.X_LIVE_CHAT_PROFILE_DIR)
   : path.join(projectRoot, ".data", "x-live-chat-profile");
@@ -41,7 +45,6 @@ const isProduction = process.env.NODE_ENV === "production";
 const messageHistoryLimit = parsePositiveIntegerEnv("CHAT_HISTORY_LIMIT", 500);
 const viewerPollMs = parsePositiveIntegerEnv("VIEWER_POLL_MS", 30000);
 const marketBubbleSourceId = "marketbubble:native-live";
-const marketBubbleSourceLabel = process.env.MARKETBUBBLE_CHAT_LABEL ?? "MarketBubble";
 const publicStreamEmbedUrl = process.env.MARKETBUBBLE_STREAM_EMBED_URL ?? "";
 const publicStreamWatchUrl = process.env.MARKETBUBBLE_STREAM_WATCH_URL ?? "";
 const defaultXLiveCaptureAllowedOrigins = [
@@ -72,6 +75,17 @@ const demoEnabled =
 const app = express();
 const hub = new ChatHub(messageHistoryLimit);
 const sourceHub = new SourceHub();
+const liveSessionStore = new LiveSessionStore({
+  filePath: liveSessionPath,
+  defaults: {
+    id: "default",
+    title: process.env.MARKETBUBBLE_DASHBOARD_TITLE ?? "MarketBubble Live",
+    nativeChatLabel: process.env.MARKETBUBBLE_CHAT_LABEL ?? "MarketBubble",
+    streamEmbedUrl: absoluteUrlOrNull(publicStreamEmbedUrl),
+    streamWatchUrl: absoluteUrlOrNull(publicStreamWatchUrl),
+    description: ""
+  }
+});
 const statuses = new IntegrationStatusStore();
 const httpServer = createHttpServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
@@ -291,7 +305,11 @@ function sourceUrlForMessage(message: ChatMessage) {
     return account ? `https://x.com/${account}/livechat` : null;
   }
 
-  return absoluteUrlOrNull(publicStreamWatchUrl);
+  return liveSessionStore.get().streamWatchUrl;
+}
+
+function currentMarketBubbleSourceLabel() {
+  return liveSessionStore.get().nativeChatLabel;
 }
 
 function sourceIdForPlatform(platform: Platform, channelId: string | null | undefined, channelName: string | null | undefined, fallback: string) {
@@ -302,7 +320,7 @@ function enrichMessageSource(message: ChatMessage) {
   const parsed = chatMessageSchema.parse(message);
   const sourceLabel =
     parsed.sourceLabel ??
-    (parsed.platform === "marketbubble" ? marketBubbleSourceLabel : parsed.channelName) ??
+    (parsed.platform === "marketbubble" ? currentMarketBubbleSourceLabel() : parsed.channelName) ??
     platformLabels[parsed.platform];
   const sourceId =
     parsed.sourceId ??
@@ -337,10 +355,10 @@ function updateMarketBubbleViewerSource() {
   sourceHub.upsert({
     id: marketBubbleSourceId,
     platform: "marketbubble",
-    label: marketBubbleSourceLabel,
+    label: currentMarketBubbleSourceLabel(),
     channelId: "marketbubble-native-live",
-    channelName: marketBubbleSourceLabel,
-    sourceUrl: absoluteUrlOrNull(publicStreamWatchUrl),
+    channelName: currentMarketBubbleSourceLabel(),
+    sourceUrl: liveSessionStore.get().streamWatchUrl,
     viewerCount: publicViewerSockets.size,
     status: "live",
     detail: "Native dashboard viewers"
@@ -1420,12 +1438,10 @@ function publicXConfig() {
 function publicDashboardConfig(req?: Request) {
   const host = req?.get("host") ?? `localhost:${port}`;
   const protocol = req?.protocol ?? "http";
+  const session = liveSessionStore.get();
 
   return {
-    title: process.env.MARKETBUBBLE_DASHBOARD_TITLE ?? "MarketBubble Live",
-    nativeChatLabel: marketBubbleSourceLabel,
-    streamEmbedUrl: absoluteUrlOrNull(publicStreamEmbedUrl),
-    streamWatchUrl: absoluteUrlOrNull(publicStreamWatchUrl),
+    ...session,
     publicUrl: `${protocol}://${host}/live`
   };
 }
@@ -1631,6 +1647,7 @@ app.get("/api/health", (req, res) => {
     configuration: {
       envFileLoaded: !envLoadResult.error,
       envFilePath,
+      liveSessionPath,
       realIngestionEnabled,
       demoForced: process.env.DEMO_CHAT_FORCE === "true"
     },
@@ -1660,6 +1677,31 @@ app.get("/api/sources", (_req, res) => {
 app.get("/api/public/config", (req, res) => {
   res.json({
     dashboard: publicDashboardConfig(req),
+    sources: sourceHub.snapshot()
+  });
+});
+
+app.get("/api/live-session", (req, res) => {
+  res.json({
+    dashboard: publicDashboardConfig(req),
+    sources: sourceHub.snapshot()
+  });
+});
+
+app.put("/api/live-session", (req, res) => {
+  const parsed = liveSessionUpdateSchema.safeParse(req.body ?? {});
+
+  if (!parsed.success) {
+    return sendError(res, 400, "Invalid live session settings.");
+  }
+
+  const session = liveSessionStore.update(parsed.data);
+  updateMarketBubbleViewerSource();
+  res.json({
+    dashboard: {
+      ...session,
+      publicUrl: `${req.protocol}://${req.get("host")}/live`
+    },
     sources: sourceHub.snapshot()
   });
 });
@@ -1720,6 +1762,7 @@ app.post("/api/native-chat/messages", (req, res) => {
 
   const now = new Date().toISOString();
   const platformMessageId = `native-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const liveSession = liveSessionStore.get();
   const message = chatMessageSchema.parse({
     id: makeMessageId("marketbubble", platformMessageId),
     platform: "marketbubble",
@@ -1729,10 +1772,10 @@ app.post("/api/native-chat/messages", (req, res) => {
     username: parsed.data.username,
     displayName: parsed.data.username,
     channelId: "marketbubble-native-live",
-    channelName: marketBubbleSourceLabel,
+    channelName: liveSession.nativeChatLabel,
     sourceId: marketBubbleSourceId,
-    sourceLabel: marketBubbleSourceLabel,
-    sourceUrl: absoluteUrlOrNull(publicStreamWatchUrl),
+    sourceLabel: liveSession.nativeChatLabel,
+    sourceUrl: liveSession.streamWatchUrl,
     message: parsed.data.message,
     fragments: [textFragment(parsed.data.message)],
     badges: [{ label: "Native", type: "marketbubble-native", count: null }],

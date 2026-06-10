@@ -166,10 +166,13 @@ type HealthResponse = {
 };
 
 type PublicDashboardConfig = {
+  id?: string;
   title: string;
   nativeChatLabel: string;
   streamEmbedUrl: string | null;
   streamWatchUrl: string | null;
+  description?: string;
+  updatedAt?: string;
   publicUrl: string;
 };
 
@@ -325,6 +328,7 @@ export function App() {
   const kickBroadcasterEdited = useRef(false);
   const xTargetAccountEdited = useRef(false);
   const xRulesEdited = useRef(false);
+  const liveSessionEdited = useRef(false);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [enabledPlatforms, setEnabledPlatforms] = useState<Record<Platform, boolean>>({
     twitch: true,
@@ -344,6 +348,11 @@ export function App() {
   const [xTargetAccount, setXTargetAccount] = useState("");
   const [xRules, setXRules] = useState("");
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [sessionTitle, setSessionTitle] = useState("");
+  const [sessionNativeChatLabel, setSessionNativeChatLabel] = useState("");
+  const [sessionStreamEmbedUrl, setSessionStreamEmbedUrl] = useState("");
+  const [sessionStreamWatchUrl, setSessionStreamWatchUrl] = useState("");
+  const [sessionDescription, setSessionDescription] = useState("");
   const [mockText, setMockText] = useState("Testing the unified feed");
   const [mockPlatform, setMockPlatform] = useState<Platform>("twitch");
   const [publicConfig, setPublicConfig] = useState<PublicDashboardConfig | null>(null);
@@ -377,6 +386,13 @@ export function App() {
       if (nextXTargetAccount) {
         setXTargetAccount(nextXTargetAccount);
       }
+    }
+    if (!liveSessionEdited.current) {
+      setSessionTitle(nextHealth.publicDashboard.title);
+      setSessionNativeChatLabel(nextHealth.publicDashboard.nativeChatLabel);
+      setSessionStreamEmbedUrl(nextHealth.publicDashboard.streamEmbedUrl ?? "");
+      setSessionStreamWatchUrl(nextHealth.publicDashboard.streamWatchUrl ?? "");
+      setSessionDescription(nextHealth.publicDashboard.description ?? "");
     }
   }, [broadcasterLogin, kickBroadcaster, xRules, xTargetAccount]);
 
@@ -544,6 +560,10 @@ export function App() {
     setXRules(value);
   }
 
+  function markLiveSessionEdited() {
+    liveSessionEdited.current = true;
+  }
+
   function cycleSettingsPlatform(direction: -1 | 1) {
     setActiveSettingsPlatform((current) => {
       const currentIndex = settingsPlatformOrder.indexOf(current);
@@ -695,6 +715,30 @@ export function App() {
     await loadHealth();
   }
 
+  async function saveLiveSession() {
+    setSettingsMessage("Saving live session...");
+    const response = await fetch("/api/live-session", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: sessionTitle.trim(),
+        nativeChatLabel: sessionNativeChatLabel.trim(),
+        streamEmbedUrl: sessionStreamEmbedUrl.trim() || null,
+        streamWatchUrl: sessionStreamWatchUrl.trim() || null,
+        description: sessionDescription.trim()
+      })
+    });
+
+    if (!response.ok) {
+      setSettingsMessage(await responseErrorMessage(response, "Live session save failed."));
+      return;
+    }
+
+    liveSessionEdited.current = false;
+    setSettingsMessage("Live session saved.");
+    await loadHealth();
+  }
+
   async function removeXLiveChatTarget(targetId: string) {
     setSettingsMessage("Stopping X live chat target...");
     const response = await fetch(`/api/integrations/x/livechat/targets/${encodeURIComponent(targetId)}`, { method: "DELETE" });
@@ -716,6 +760,7 @@ export function App() {
 
   if (isPublicDashboard) {
     const dashboardTitle = publicConfig?.title ?? "MarketBubble Live";
+    const dashboardDescription = publicConfig?.description ?? "";
     const streamEmbedUrl = publicConfig?.streamEmbedUrl ?? null;
     const streamWatchUrl =
       publicConfig?.streamWatchUrl ??
@@ -727,7 +772,10 @@ export function App() {
         <header className="public-header">
           <div className="public-brand">
             <Radio size={16} aria-hidden="true" />
-            <h1>{dashboardTitle}</h1>
+            <div>
+              <h1>{dashboardTitle}</h1>
+              {dashboardDescription ? <span>{dashboardDescription}</span> : null}
+            </div>
           </div>
           <div className="public-header-actions">
             <ViewerSummary snapshot={sourceSnapshot} />
@@ -890,6 +938,92 @@ export function App() {
             </div>
 
             <div className={`settings-platform-panel settings-platform-${activeSettingsPlatform}`}>
+              <div className="settings-section settings-session-section">
+                <div className="settings-heading">
+                  <Radio size={15} aria-hidden="true" />
+                  <strong>Live Session</strong>
+                  <span className="settings-status-label">Public</span>
+                </div>
+                <div className="settings-control-row">
+                  <label>
+                    <span>Dashboard Title</span>
+                    <input
+                      value={sessionTitle}
+                      onChange={(event) => {
+                        markLiveSessionEdited();
+                        setSessionTitle(event.target.value);
+                      }}
+                      placeholder="MarketBubble Live"
+                    />
+                  </label>
+                  <label>
+                    <span>Native Chat Label</span>
+                    <input
+                      value={sessionNativeChatLabel}
+                      onChange={(event) => {
+                        markLiveSessionEdited();
+                        setSessionNativeChatLabel(event.target.value);
+                      }}
+                      placeholder="MarketBubble"
+                    />
+                  </label>
+                  <div className="settings-actions">
+                    <button className="secondary-button" type="button" title="Save live session" onClick={() => void saveLiveSession()}>
+                      <RefreshCw size={15} aria-hidden="true" />
+                      Save
+                    </button>
+                    <a className="secondary-link-button" href="/live" target="_blank" rel="noreferrer" title="Open public dashboard">
+                      <ExternalLink size={15} aria-hidden="true" />
+                      View
+                    </a>
+                  </div>
+                </div>
+                <div className="settings-control-row settings-control-row-full">
+                  <label>
+                    <span>Stream Embed URL</span>
+                    <input
+                      value={sessionStreamEmbedUrl}
+                      onChange={(event) => {
+                        markLiveSessionEdited();
+                        setSessionStreamEmbedUrl(event.target.value);
+                      }}
+                      placeholder="https://player.example/embed"
+                    />
+                  </label>
+                </div>
+                <div className="settings-control-row settings-control-row-full">
+                  <label>
+                    <span>Public Watch URL</span>
+                    <input
+                      value={sessionStreamWatchUrl}
+                      onChange={(event) => {
+                        markLiveSessionEdited();
+                        setSessionStreamWatchUrl(event.target.value);
+                      }}
+                      placeholder="https://marketbubble.com/live"
+                    />
+                  </label>
+                </div>
+                <div className="settings-control-row settings-control-row-full">
+                  <label>
+                    <span>Description</span>
+                    <input
+                      value={sessionDescription}
+                      onChange={(event) => {
+                        markLiveSessionEdited();
+                        setSessionDescription(event.target.value);
+                      }}
+                      placeholder="Short public session note"
+                    />
+                  </label>
+                </div>
+                <div className="settings-meta">
+                  <span>{health?.publicDashboard.publicUrl ?? "/live"}</span>
+                  <span>{sourceSnapshot.totalKnownViewers} known viewers</span>
+                  <span>{sourceSnapshot.unknownSourceCount} unknown-count sources</span>
+                </div>
+              </div>
+
               {activeSettingsPlatform === "twitch" ? (
                 <div className="settings-section settings-section-twitch">
               <div className="settings-heading">

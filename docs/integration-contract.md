@@ -106,6 +106,24 @@ Returns the current viewer/source snapshot, including combined known viewer coun
 
 Returns public dashboard configuration for `/live`, including the configured stream embed URL and current source snapshot.
 
+### `GET /api/live-session`
+
+Returns the operator-editable Live Session configuration plus the current source snapshot.
+
+### `PUT /api/live-session`
+
+Updates the saved Live Session configuration. Values are stored in `LIVE_SESSION_FILE`, defaulting to `.data/live-session.json`.
+
+```json
+{
+  "title": "MarketBubble Live",
+  "nativeChatLabel": "MarketBubble",
+  "streamEmbedUrl": "https://player.example/embed",
+  "streamWatchUrl": "https://marketbubble.com/live",
+  "description": "Shared live chat and stream"
+}
+```
+
 ### `GET /api/health`
 
 Returns process and integration status.

@@ -422,6 +422,7 @@ h1 {
 .source-chip:hover,
 .primary-button:hover,
 .secondary-button:hover,
+.secondary-link-button:hover,
 .ghost-icon:hover {
   border-color: #454d60;
   color: #f7f8fb;
@@ -652,7 +653,8 @@ h1 {
   flex-wrap: wrap;
 }
 
-.settings-actions .secondary-button {
+.settings-actions .secondary-button,
+.settings-actions .secondary-link-button {
   height: 30px;
   padding: 0 9px;
   font-size: 12px;
@@ -960,7 +962,8 @@ h1 {
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.secondary-link-button {
   flex: 0 0 auto;
   height: 32px;
   justify-content: center;
@@ -974,10 +977,12 @@ h1 {
   font-weight: 900;
 }
 
-.secondary-button {
+.secondary-button,
+.secondary-link-button {
   border-color: #2a303d;
   color: #dce1ea;
   background: #131720;
+  text-decoration: none;
 }
 
 .public-shell {
@@ -1034,6 +1039,12 @@ h1 {
   gap: 7px;
 }
 
+.public-brand > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
 .public-brand svg,
 .public-chat-header svg {
   color: #32d9c3;
@@ -1042,6 +1053,15 @@ h1 {
 .public-brand h1 {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.public-brand span {
+  min-width: 0;
+  overflow: hidden;
+  color: #9da4b3;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1331,7 +1351,8 @@ h1 {
     justify-content: flex-start;
   }
 
-  .settings-actions .secondary-button {
+.settings-actions .secondary-button,
+.settings-actions .secondary-link-button {
     flex: 1 1 calc(50% - 4px);
     min-width: 92px;
   }
