@@ -26,6 +26,8 @@ The existing root app remains the operator/admin console. It is used to connect 
 
 The public stream surface supports source switching. The operator-configured primary feed is shown first, then the dashboard can expose stream/watch choices built from active tracked sources. This lets a viewer stay in the native MarketBubble chat while choosing the playback surface they prefer, such as Kick for fewer ads or Twitch for platform-specific viewing features.
 
+Embedded platform players can still pause or interrupt playback for reasons outside the app, including platform ad behavior, browser autoplay/power policies, or the iframe provider's own session rules. The viewer surface should keep a visible player reload action and external open action so viewers can recover playback without losing the shared chat room.
+
 ## Source Identity
 
 Every chat message must preserve two identities:
@@ -52,6 +54,8 @@ MarketBubble native chat is a first-party source with platform `marketbubble`. M
 
 The strategic purpose of native chat is not only message capture. It should become the shared room that Twitch, Kick, and X viewers recognize as the canonical conversation around the MarketBubble show. Production versions should move toward account-backed identity, moderation tools, badges, pinned context, and visible cross-platform source labeling so the website has social value that the individual platforms cannot provide alone.
 
+Until account login is added, the public client creates a stable local guest ID and sends it with native chat messages. That ID is not strong authentication, but it gives moderation and debugging a consistent browser-level identifier instead of relying only on editable display names.
+
 ## Current Implementation Slice
 
 The current implementation adds:
@@ -70,6 +74,9 @@ The current implementation adds:
 - multiple simultaneous X livechat capture targets
 - visual style presets, including a MarketBubble-inspired default
 - public stream source switcher with compact source tabs
+- stream player reload/open controls for embed recovery
+- stable local guest IDs for unauthenticated native chat
+- compact chat rows that keep platform/source visible and move badge details into hover metadata
 
 Live Session settings are stored in `LIVE_SESSION_FILE`, defaulting to `.data/live-session.json`. Environment variables still provide first-boot defaults for dashboard title, native chat label, and stream URLs.
 
@@ -85,3 +92,4 @@ MarketBubble's public site is a dark Framer-built brand experience using high-co
 - Should X viewer counts be captured from the live broadcast page, the livechat page, or left unknown?
 - Should the dashboard support multiple named events or one global MarketBubble live room?
 - Should stream source choices be operator-curated per event, auto-derived from tracked chat sources, or both?
+- Should external platform badges be configurable per viewer, moderator-only, or only visible on hover?

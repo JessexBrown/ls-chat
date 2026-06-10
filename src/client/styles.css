@@ -407,6 +407,11 @@ h1 {
   height: 34px;
 }
 
+.stream-open-button {
+  flex: 0 0 auto;
+  text-decoration: none;
+}
+
 .ghost-icon {
   width: 24px;
   height: 24px;
@@ -582,9 +587,79 @@ h1 {
 .settings-meta,
 .settings-grid,
 .settings-control-row,
-.settings-actions {
+.settings-actions,
+.settings-category-heading,
+.settings-category-heading > div,
+.settings-advanced-panel summary {
   display: flex;
   align-items: center;
+}
+
+.settings-category-heading {
+  min-width: 0;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(232, 255, 156, 0.14);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background:
+    linear-gradient(90deg, rgba(232, 255, 156, 0.075), transparent 56%),
+    rgba(255, 255, 255, 0.025);
+}
+
+.settings-category-heading > div {
+  min-width: 0;
+  gap: 7px;
+}
+
+.settings-category-heading svg {
+  color: #e8ff9c;
+}
+
+.settings-category-heading strong {
+  min-width: 0;
+  color: #f7f8fb;
+  font-size: 13px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.settings-category-heading > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #9da4b3;
+  font-size: 12px;
+  font-weight: 750;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-advanced-panel {
+  width: min(100%, 880px);
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.settings-advanced-panel summary {
+  min-height: 38px;
+  gap: 7px;
+  padding: 0 10px;
+  color: #dce1ea;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.settings-advanced-panel summary::marker {
+  color: #9da4b3;
+}
+
+.settings-advanced-panel .settings-meta {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 9px;
 }
 
 .settings-heading {
@@ -1031,6 +1106,8 @@ h1 {
 .public-chat-header,
 .public-chat-header > div,
 .stream-link,
+.stream-open-button,
+.native-identity-chip,
 .native-composer {
   display: flex;
   align-items: center;
@@ -1312,11 +1389,26 @@ h1 {
   background: #10131a;
 }
 
-.native-composer input:first-child {
+.native-identity-chip {
+  flex: 0 0 auto;
+  height: 32px;
+  max-width: 108px;
+  justify-content: center;
+  border: 1px solid rgba(232, 255, 156, 0.28);
+  border-radius: 8px;
+  padding: 0 8px;
+  color: #e8ff9c;
+  background: rgba(232, 255, 156, 0.06);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.native-name-input {
   flex: 0 0 132px;
 }
 
-.native-composer input:nth-child(2) {
+.native-message-input {
   flex: 1 1 auto;
 }
 
@@ -1361,6 +1453,16 @@ h1 {
   .settings-platform-switcher {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .settings-category-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .settings-category-heading > span {
+    text-align: left;
   }
 
   .settings-tabs {
@@ -1578,11 +1680,12 @@ h1 {
 
   .native-composer {
     display: grid;
-    grid-template-columns: minmax(84px, 0.32fr) minmax(0, 1fr) 76px;
+    grid-template-columns: minmax(72px, 0.24fr) minmax(76px, 0.28fr) minmax(0, 1fr) 70px;
     gap: 6px;
   }
 
-  .native-composer input:first-child {
+  .native-identity-chip,
+  .native-name-input {
     flex-basis: auto;
     width: 100%;
   }
@@ -1692,6 +1795,8 @@ h1 {
 
 :root[data-theme] .source-bar,
 :root[data-theme] .settings-tabs,
+:root[data-theme] .settings-category-heading,
+:root[data-theme] .settings-advanced-panel,
 :root[data-theme] .search-box,
 :root[data-theme] .connection-pill,
 :root[data-theme] .viewer-total,
@@ -1702,6 +1807,7 @@ h1 {
 :root[data-theme] .composer-bar input,
 :root[data-theme] .native-composer input,
 :root[data-theme] .stream-source-tab,
+:root[data-theme] .native-identity-chip,
 :root[data-theme] .settings-section .settings-url {
   border-color: var(--theme-border);
   background: var(--theme-surface-2);
@@ -1709,6 +1815,7 @@ h1 {
 
 :root[data-theme] .chat-title-row svg,
 :root[data-theme] .settings-page-title svg,
+:root[data-theme] .settings-category-heading svg,
 :root[data-theme] .public-brand svg,
 :root[data-theme] .public-chat-header svg,
 :root[data-theme] .viewer-total svg,
@@ -1720,6 +1827,7 @@ h1 {
 :root[data-theme] .message-time,
 :root[data-theme] .message-channel,
 :root[data-theme] .settings-page-title span,
+:root[data-theme] .settings-category-heading > span,
 :root[data-theme] .settings-section p,
 :root[data-theme] .public-brand span,
 :root[data-theme] .public-chat-header span,
@@ -1756,6 +1864,10 @@ h1 {
   border-color: var(--theme-border-strong);
   color: var(--theme-accent);
   background: rgba(255, 255, 255, 0.055);
+}
+
+:root[data-theme] .native-identity-chip {
+  color: var(--theme-accent);
 }
 
 :root[data-theme] .message-row {

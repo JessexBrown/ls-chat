@@ -98,4 +98,29 @@ describe("public dashboard stream sources", () => {
     expect(result[0].embedUrl).toBe("https://player.twitch.tv/?channel=jynxzi&parent=marketbubble.com&autoplay=false");
     expect(result[1].embedUrl).toBe("https://player.kick.com/jynxzi");
   });
+
+  it("does not expose development mock sources as viewer stream options", () => {
+    const result = buildStreamSources({
+      session: { ...session, streamEmbedUrl: null, streamWatchUrl: null },
+      parentHost: "marketbubble.com",
+      sources: [
+        ...sources.sources,
+        {
+          id: "local-dev:twitch",
+          platform: "twitch",
+          label: "Local Development",
+          channelId: "local-dev-channel",
+          channelName: "Local Development",
+          sourceUrl: "https://www.twitch.tv/local-development",
+          viewerCount: null,
+          chattersCount: null,
+          status: "connected",
+          detail: null,
+          updatedAt: now
+        }
+      ]
+    });
+
+    expect(result.map((source) => source.label)).toEqual(["jynxzi", "jynxzi"]);
+  });
 });

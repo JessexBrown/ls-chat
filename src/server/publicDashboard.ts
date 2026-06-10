@@ -56,7 +56,7 @@ export function buildStreamSources(options: {
   });
 
   for (const source of options.sources) {
-    if (!source.sourceUrl || source.platform === "marketbubble") {
+    if (!source.sourceUrl || source.platform === "marketbubble" || isDevelopmentSource(source)) {
       continue;
     }
 
@@ -96,4 +96,12 @@ function addStreamSource(streamSources: StreamSource[], seen: Set<string>, value
 
 function streamSourceKey(source: StreamSource) {
   return (source.watchUrl ?? source.embedUrl ?? source.id).trim().toLowerCase().replace(/\/$/, "");
+}
+
+function isDevelopmentSource(source: ViewerSource) {
+  return (
+    source.channelId === "local-dev-channel" ||
+    source.id.startsWith("local-dev:") ||
+    source.label.trim().toLowerCase() === "local development"
+  );
 }

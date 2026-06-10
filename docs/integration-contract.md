@@ -89,12 +89,13 @@ Publishes a first-party MarketBubble native chat message into the same normalize
 
 ```json
 {
+  "clientId": "guest_local_browser_id",
   "username": "viewer_name",
   "message": "hello from MarketBubble"
 }
 ```
 
-The endpoint trims usernames/messages, caps usernames at 32 characters, caps messages at 500 characters, and applies a small in-memory per-client rate limit. Defaults:
+The endpoint trims usernames/messages, caps usernames at 32 characters, caps messages at 500 characters, accepts an optional stable local `clientId`, and applies a small in-memory per-client rate limit. When `clientId` is present, native messages use `platformUserId: "marketbubble:<clientId>"` so moderation/debugging can distinguish repeat browser sessions from editable display names.
 
 ```text
 NATIVE_CHAT_RATE_LIMIT=8

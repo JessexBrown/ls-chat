@@ -73,6 +73,30 @@ function initialNativeUsername() {
   return window.localStorage.getItem("ls-chat-native-username") ?? "viewer";
 }
 
+function initialNativeClientId() {
+  if (typeof window === "undefined") {
+    return "guest-server";
+  }
+
+  const existing = window.localStorage.getItem("ls-chat-native-client-id");
+  if (existing) {
+    return existing;
+  }
+
+  const randomId =
+    typeof window.crypto?.randomUUID === "function"
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const nextId = `guest_${randomId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 48)}`;
+  window.localStorage.setItem("ls-chat-native-client-id", nextId);
+  return nextId;
+}
+
+function shortNativeClientId(value: string) {
+  const compact = value.replace(/^guest_/, "").replace(/[^A-Za-z0-9]/g, "");
+  return `Guest ${compact.slice(-6).toUpperCase() || "LOCAL"}`;
+}
+
 type ChatVirtuosoContext = {
   onScrollPositionChange: (scrollTop: number) => void;
 };
@@ -305,10 +329,22 @@ function streamSourceMeta(source: StreamSource) {
   return pieces.length > 0 ? pieces.join(" / ") : source.detail ?? "Feed available";
 }
 
+function isDevelopmentStreamSource(source: StreamSource) {
+  return source.id.startsWith("local-dev:") || source.id.includes(":local-dev") || source.label.trim().toLowerCase() === "local development";
+}
+
 function MessageRow({ message }: { message: ChatMessage }) {
   const displayName = message.displayName ?? message.username;
   const originLabel = sourceTitle(message);
   const sourceLabel = message.sourceLabel ?? message.channelName ?? platformLabels[message.platform];
+  const badgeTitle = message.badges.map((badge) => badge.label).filter(Boolean).join(", ");
+  const usernameTitle = [
+    displayName,
+    message.platformUserId ? `ID: ${message.platformUserId}` : null,
+    badgeTitle ? `Badges: ${badgeTitle}` : null
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <article className={`message-row message-row-${message.platform}`}>
@@ -318,14 +354,9 @@ function MessageRow({ message }: { message: ChatMessage }) {
         <span className="message-channel" title={originLabel}>
           {sourceLabel}
         </span>
-        <span className="message-username" style={{ color: message.color ?? platformColors[message.platform] }}>
+        <span className="message-username" title={usernameTitle} style={{ color: message.color ?? platformColors[message.platform] }}>
           {displayName}
         </span>
-        {message.badges.slice(0, 2).map((badge) => (
-          <span className="message-badge" title={badge.label} key={`${message.id}-${badge.label}-${badge.type}`}>
-            {badge.label.slice(0, 3)}
-          </span>
-        ))}
         <span className="message-separator">:</span>
         <span className="message-text">{message.message}</span>
       </div>
@@ -412,6 +443,8 @@ export function App() {
   const [mockPlatform, setMockPlatform] = useState<Platform>("twitch");
   const [publicConfig, setPublicConfig] = useState<PublicDashboardConfig | null>(null);
   const [activeStreamSourceId, setActiveStreamSourceId] = useState(() => window.localStorage.getItem("ls-chat-active-stream-source") ?? "");
+  const [streamFrameRefreshKey, setStreamFrameRefreshKey] = useState(0);
+  const [nativeClientId] = useState(() => initialNativeClientId());
   const [nativeUsername, setNativeUsername] = useState(() => initialNativeUsername());
   const [nativeMessage, setNativeMessage] = useState("");
   const [nativeStatus, setNativeStatus] = useState("");
@@ -517,7 +550,7 @@ export function App() {
   }, [enabledPlatforms, messages, query]);
 
   const streamSources = useMemo<StreamSource[]>(() => {
-    const configuredSources = publicConfig?.streamSources ?? [];
+    const configuredSources = (publicConfig?.streamSources ?? []).filter((source) => !isDevelopmentStreamSource(source));
     if (configuredSources.length > 0) {
       return configuredSources;
     }
@@ -643,6 +676,7 @@ export function App() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        clientId: nativeClientId,
         username,
         message: text
       })
@@ -683,6 +717,10 @@ export function App() {
     );
     const nextIndex = (currentIndex + direction + streamSources.length) % streamSources.length;
     setActiveStreamSourceId(streamSources[nextIndex].id);
+  }
+
+  function reloadStreamFrame() {
+    setStreamFrameRefreshKey((current) => current + 1);
   }
 
   function updateTwitchBroadcasterLogin(value: string) {
@@ -968,12 +1006,26 @@ export function App() {
                   <button className="icon-button" type="button" title="Next stream source" onClick={() => cycleStreamSource(1)}>
                     <ChevronRight size={16} aria-hidden="true" />
                   </button>
+                  <button className="icon-button" type="button" title="Reload stream player" onClick={reloadStreamFrame}>
+                    <RefreshCw size={16} aria-hidden="true" />
+                  </button>
+                  {streamWatchUrl ? (
+                    <a className="icon-button stream-open-button" href={streamWatchUrl} target="_blank" rel="noreferrer" title="Open stream source">
+                      <ExternalLink size={16} aria-hidden="true" />
+                    </a>
+                  ) : null}
                 </div>
               </div>
             ) : null}
             <div className="stream-frame">
               {streamEmbedUrl ? (
-                <iframe src={streamEmbedUrl} title={dashboardTitle} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen />
+                <iframe
+                  key={`${activeStreamSource?.id ?? "stream"}:${streamFrameRefreshKey}`}
+                  src={streamEmbedUrl}
+                  title={dashboardTitle}
+                  allow="autoplay; fullscreen; picture-in-picture"
+                  allowFullScreen
+                />
               ) : (
                 <div className="stream-placeholder">
                   <Radio size={30} aria-hidden="true" />
@@ -1009,7 +1061,11 @@ export function App() {
                 void sendNativeMessage();
               }}
             >
+              <span className="native-identity-chip" title={`Local MarketBubble chat ID: ${nativeClientId}`}>
+                {shortNativeClientId(nativeClientId)}
+              </span>
               <input
+                className="native-name-input"
                 value={nativeUsername}
                 onChange={(event) => setNativeUsername(event.target.value)}
                 aria-label="Native chat username"
@@ -1017,6 +1073,7 @@ export function App() {
                 maxLength={32}
               />
               <input
+                className="native-message-input"
                 value={nativeMessage}
                 onChange={(event) => setNativeMessage(event.target.value)}
                 aria-label="Native chat message"
@@ -1111,7 +1168,7 @@ export function App() {
                 <Settings size={18} aria-hidden="true" />
                 <div>
                   <h2>Source Settings</h2>
-                  <span>{platformLabels[activeSettingsPlatform]}</span>
+                  <span>MarketBubble site and platform connections</span>
                 </div>
               </div>
 
@@ -1142,6 +1199,13 @@ export function App() {
             </div>
 
             <div className={`settings-platform-panel settings-platform-${activeSettingsPlatform}`}>
+              <div className="settings-category-heading">
+                <div>
+                  <Radio size={15} aria-hidden="true" />
+                  <strong>MarketBubble Site</strong>
+                </div>
+                <span>Public dashboard, native chat room, and stream defaults</span>
+              </div>
               <div className="settings-section settings-session-section">
                 <div className="settings-heading">
                   <Radio size={15} aria-hidden="true" />
@@ -1226,6 +1290,14 @@ export function App() {
                   <span>{sourceSnapshot.totalKnownViewers} known viewers</span>
                   <span>{sourceSnapshot.unknownSourceCount} unknown-count sources</span>
                 </div>
+              </div>
+
+              <div className="settings-category-heading">
+                <div>
+                  <Settings size={15} aria-hidden="true" />
+                  <strong>Platform Connections</strong>
+                </div>
+                <span>Track external broadcasters and manage ingestion per source</span>
               </div>
 
               {activeSettingsPlatform === "twitch" ? (
@@ -1452,6 +1524,19 @@ export function App() {
               <p>{xStatus?.detail ?? "X uses Filtered Stream rules for public posts."}</p>
                 </div>
               ) : null}
+
+              <details className="settings-advanced-panel">
+                <summary>
+                  <Settings size={15} aria-hidden="true" />
+                  <span>Advanced Diagnostics</span>
+                </summary>
+                <div className="settings-meta">
+                  <span>{health?.messageCount ?? 0} retained messages</span>
+                  <span>{health?.demoEnabled ? "Demo messages on" : "Demo messages off"}</span>
+                  <span>{connectionState}</span>
+                  <span>{sourceSnapshot.sources.length} source records</span>
+                </div>
+              </details>
             </div>
 
             {settingsMessage ? (

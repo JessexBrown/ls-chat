@@ -28,7 +28,8 @@ Expected result:
 7. Confirm tracked Twitch/Kick sources appear as additional tabs after the source refresh.
 8. Click each source tab and the previous/next buttons.
 9. Confirm the stream frame updates while the combined chat stays in place.
-10. If a source cannot be embedded, confirm the fallback shows an external `Open stream` link instead of a broken blank panel.
+10. Click the stream reload control and confirm only the player reloads while chat remains connected.
+11. If a source cannot be embedded, confirm the fallback shows an external `Open stream` link instead of a broken blank panel.
 
 ## Native Chat Functional Test
 
@@ -37,18 +38,21 @@ Expected result:
 3. Confirm the message appears in window A.
 4. Confirm the same message appears in window B without refreshing.
 5. Confirm the message row shows platform `MB` and the configured native chat label.
-6. Call `GET /api/messages` and confirm the message is present with:
+6. Hover the native username and confirm a stable MarketBubble guest ID is available in the row metadata.
+7. Refresh the browser and confirm the compact guest ID in the composer remains stable.
+8. Call `GET /api/messages` and confirm the message is present with:
 
 ```json
 {
   "platform": "marketbubble",
   "sourceKind": "chat",
-  "sourceId": "marketbubble:native-live"
+  "sourceId": "marketbubble:native-live",
+  "platformUserId": "marketbubble:guest_..."
 }
 ```
 
-7. Send more than `NATIVE_CHAT_RATE_LIMIT` messages within `NATIVE_CHAT_RATE_WINDOW_MS`.
-8. Confirm the endpoint returns `429` and the UI shows the failure text.
+9. Send more than `NATIVE_CHAT_RATE_LIMIT` messages within `NATIVE_CHAT_RATE_WINDOW_MS`.
+10. Confirm the endpoint returns `429` and the UI shows the failure text.
 
 ## Mobile Layout Test
 

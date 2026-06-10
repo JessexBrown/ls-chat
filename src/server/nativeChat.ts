@@ -3,6 +3,13 @@ import { z } from "zod";
 import { chatMessageSchema, makeMessageId, textFragment, type ChatMessage } from "../shared/chat";
 
 export const nativeChatInputSchema = z.object({
+  clientId: z
+    .string()
+    .trim()
+    .min(8)
+    .max(80)
+    .regex(/^[A-Za-z0-9:_-]+$/)
+    .optional(),
   username: z.string().trim().min(1).max(32).default("marketbubble-viewer"),
   message: z.string().trim().min(1).max(500)
 });
@@ -25,7 +32,7 @@ export function createNativeChatMessage(input: NativeChatInput, options: NativeC
     platform: "marketbubble",
     sourceKind: "chat",
     platformMessageId,
-    platformUserId: input.username,
+    platformUserId: input.clientId ? `marketbubble:${input.clientId}` : `marketbubble:${input.username}`,
     username: input.username,
     displayName: input.username,
     channelId: "marketbubble-native-live",
@@ -35,10 +42,13 @@ export function createNativeChatMessage(input: NativeChatInput, options: NativeC
     sourceUrl: options.streamWatchUrl,
     message: input.message,
     fragments: [textFragment(input.message)],
-    badges: [{ label: "Native", type: "marketbubble-native", count: null }],
+    badges: [],
     avatarUrl: null,
     color: "#e8ff9c",
     sentAt: now,
-    receivedAt: now
+    receivedAt: now,
+    raw: {
+      clientId: input.clientId ?? null
+    }
   });
 }

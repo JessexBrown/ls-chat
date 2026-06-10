@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { websocketEnvelopeSchema, type ChatMessage, type Platform, type ViewerSnapshot } from "../shared/chat";
+import { websocketEnvelopeSchema, type ChatMessage, type Platform, type ViewerSnapshot, type ViewerSource } from "../shared/chat";
 
 type ConnectionState = "connecting" | "connected" | "disconnected";
 type StreamSurface = "admin" | "viewer";
@@ -14,6 +14,20 @@ const emptyViewerSnapshot: ViewerSnapshot = {
 
 function trimMessages(messages: ChatMessage[], limit: number) {
   return messages.length > limit ? messages.slice(messages.length - limit) : messages;
+}
+
+function isDevelopmentSource(source: ViewerSource) {
+  return source.channelId === "local-dev-channel" || source.id.startsWith("local-dev:") || source.label.trim().toLowerCase() === "local development";
+}
+
+function normalizeViewerSnapshot(snapshot: ViewerSnapshot): ViewerSnapshot {
+  const sources = snapshot.sources.filter((source) => !isDevelopmentSource(source));
+  return {
+    ...snapshot,
+    sources,
+    totalKnownViewers: sources.reduce((total, source) => total + (source.viewerCount ?? 0), 0),
+    unknownSourceCount: sources.filter((source) => source.viewerCount === null).length
+  };
 }
 
 export function useChatStream(surface: StreamSurface = "admin") {
@@ -52,7 +66,7 @@ export function useChatStream(surface: StreamSurface = "admin") {
       }
 
       if (parsed.data.type === "sources") {
-        setSourceSnapshot(parsed.data.snapshot);
+        setSourceSnapshot(normalizeViewerSnapshot(parsed.data.snapshot));
       }
     });
 

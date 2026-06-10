@@ -280,6 +280,10 @@ function absoluteUrlOrNull(value: string | null | undefined) {
 }
 
 function sourceUrlForMessage(message: ChatMessage) {
+  if (isDevelopmentMessage(message)) {
+    return null;
+  }
+
   const explicitUrl = absoluteUrlOrNull(message.sourceUrl);
   if (explicitUrl) {
     return explicitUrl;
@@ -316,6 +320,14 @@ function sourceIdForPlatform(platform: Platform, channelId: string | null | unde
   return platform === "marketbubble" ? marketBubbleSourceId : `${platform}:${sourceKey(channelId ?? channelName ?? fallback)}`;
 }
 
+function isDevelopmentMessage(message: Pick<ChatMessage, "channelId" | "platformMessageId" | "sourceId">) {
+  return (
+    message.channelId === "local-dev-channel" ||
+    message.platformMessageId.startsWith("mock-") ||
+    message.sourceId?.startsWith("local-dev:") === true
+  );
+}
+
 function enrichMessageSource(message: ChatMessage) {
   const parsed = chatMessageSchema.parse(message);
   const sourceLabel =
@@ -336,7 +348,7 @@ function enrichMessageSource(message: ChatMessage) {
 }
 
 function upsertSourceFromMessage(message: ChatMessage) {
-  if (!message.sourceId || !message.sourceLabel) {
+  if (!message.sourceId || !message.sourceLabel || isDevelopmentMessage(message)) {
     return;
   }
 
@@ -365,9 +377,10 @@ function updateMarketBubbleViewerSource() {
   });
 }
 
-function nativeChatClientId(req: Request) {
+function nativeChatClientId(req: Request, nativeClientId?: string) {
   const forwardedFor = req.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwardedFor || req.ip || req.socket.remoteAddress || "unknown";
+  const networkId = forwardedFor || req.ip || req.socket.remoteAddress || "unknown";
+  return nativeClientId ? `${networkId}:${nativeClientId}` : networkId;
 }
 
 function canPostNativeChat(clientId: string) {
@@ -1773,6 +1786,9 @@ app.post("/api/mock/messages", (req, res) => {
     displayName: parsed.data.username,
     channelId: "local-dev-channel",
     channelName: parsed.data.channelName ?? "Local Development",
+    sourceId: `local-dev:${parsed.data.platform}`,
+    sourceLabel: "Local Development",
+    sourceUrl: null,
     message: parsed.data.message,
     fragments: [textFragment(parsed.data.message)],
     badges: [],
@@ -1793,7 +1809,7 @@ app.post("/api/native-chat/messages", (req, res) => {
     return sendError(res, 400, "Invalid native chat message.");
   }
 
-  if (!canPostNativeChat(nativeChatClientId(req))) {
+  if (!canPostNativeChat(nativeChatClientId(req, parsed.data.clientId))) {
     return sendError(res, 429, "Native chat rate limit exceeded.");
   }
 

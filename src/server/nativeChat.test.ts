@@ -4,6 +4,7 @@ import { createNativeChatMessage, nativeChatInputSchema } from "./nativeChat";
 describe("native MarketBubble chat", () => {
   it("normalizes viewer messages into the unified chat contract", () => {
     const input = nativeChatInputSchema.parse({
+      clientId: "guest_test_1234",
       username: "  desk_viewer  ",
       message: "  hello from MarketBubble  "
     });
@@ -18,6 +19,7 @@ describe("native MarketBubble chat", () => {
       id: "marketbubble:native-test",
       platform: "marketbubble",
       sourceKind: "chat",
+      platformUserId: "marketbubble:guest_test_1234",
       username: "desk_viewer",
       channelName: "MarketBubble",
       sourceId: "marketbubble:native-live",
@@ -25,7 +27,8 @@ describe("native MarketBubble chat", () => {
       sourceUrl: "https://www.marketbubble.com/live",
       message: "hello from MarketBubble"
     });
-    expect(message.badges[0]).toMatchObject({ label: "Native" });
+    expect(message.badges).toEqual([]);
+    expect(message.raw).toMatchObject({ clientId: "guest_test_1234" });
   });
 
   it("rejects empty native messages", () => {
