@@ -70,6 +70,19 @@ export const viewerSnapshotSchema = z.object({
 });
 export type ViewerSnapshot = z.infer<typeof viewerSnapshotSchema>;
 
+export const streamSourceSchema = z.object({
+  id: z.string(),
+  platform: platformSchema.nullable(),
+  label: z.string(),
+  embedUrl: z.string().url().nullable(),
+  watchUrl: z.string().url().nullable(),
+  viewerCount: z.number().int().nonnegative().nullable(),
+  status: sourceStatusSchema.default("unknown"),
+  detail: z.string().nullable().default(null),
+  isPrimary: z.boolean().default(false)
+});
+export type StreamSource = z.infer<typeof streamSourceSchema>;
+
 export const clientMessageSchema = z.object({
   type: z.literal("message"),
   message: chatMessageSchema

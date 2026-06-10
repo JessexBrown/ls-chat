@@ -7,6 +7,7 @@ Last updated: 2026-06-10
 MarketBubble should become the native live destination for a shared broadcast experience. The app should still ingest Twitch, Kick, and X live chats, but the public viewer experience should live on the MarketBubble site and present one combined room:
 
 - live stream player
+- switchable stream source controls for viewers who prefer Twitch, Kick, X/watch-only, or the primary MarketBubble feed
 - combined chat from all connected platforms
 - native MarketBubble chat
 - combined viewer count
@@ -22,6 +23,8 @@ The existing root app remains the operator/admin console. It is used to connect 
 ### Public Live Dashboard
 
 `/live` is the public viewer-facing dashboard. It should prioritize the stream and combined chat over settings. Viewers can watch the configured stream, read the unified chat, see total viewers, inspect viewer source breakdowns, and send messages into native MarketBubble chat.
+
+The public stream surface supports source switching. The operator-configured primary feed is shown first, then the dashboard can expose stream/watch choices built from active tracked sources. This lets a viewer stay in the native MarketBubble chat while choosing the playback surface they prefer, such as Kick for fewer ads or Twitch for platform-specific viewing features.
 
 ## Source Identity
 
@@ -47,6 +50,8 @@ Unknown sources should remain visible in the breakdown so operators and viewers 
 
 MarketBubble native chat is a first-party source with platform `marketbubble`. Messages submitted from `/live` are normalized into the same shared `ChatMessage` pipeline as external platforms. This keeps rendering, WebSocket fan-out, source labels, and message retention consistent.
 
+The strategic purpose of native chat is not only message capture. It should become the shared room that Twitch, Kick, and X viewers recognize as the canonical conversation around the MarketBubble show. Production versions should move toward account-backed identity, moderation tools, badges, pinned context, and visible cross-platform source labeling so the website has social value that the individual platforms cannot provide alone.
+
 ## Current Implementation Slice
 
 The current implementation adds:
@@ -55,13 +60,16 @@ The current implementation adds:
 - a `ViewerSnapshot` WebSocket envelope
 - source snapshot API at `/api/sources`
 - public dashboard config at `/api/public/config`
+- public stream source list exposed as `streamSources`
 - persisted Live Session config at `/api/live-session`
 - native chat publishing at `/api/native-chat/messages`
+- in-memory native chat rate limiting
 - public dashboard route at `/live`
 - MarketBubble platform support
 - Twitch/Kick viewer-count polling foundation
 - multiple simultaneous X livechat capture targets
 - visual style presets, including a MarketBubble-inspired default
+- public stream source switcher with compact source tabs
 
 Live Session settings are stored in `LIVE_SESSION_FILE`, defaulting to `.data/live-session.json`. Environment variables still provide first-boot defaults for dashboard title, native chat label, and stream URLs.
 
@@ -73,6 +81,7 @@ MarketBubble's public site is a dark Framer-built brand experience using high-co
 
 - Which exact stream embed should be used on MarketBubble production pages?
 - Should native chat usernames be anonymous, account-backed, or OAuth-backed?
-- Should public chat posting require rate limits, CAPTCHA, or signed sessions?
+- Should public chat posting add CAPTCHA, signed viewer sessions, or stronger identity after the basic in-memory rate limit?
 - Should X viewer counts be captured from the live broadcast page, the livechat page, or left unknown?
 - Should the dashboard support multiple named events or one global MarketBubble live room?
+- Should stream source choices be operator-curated per event, auto-derived from tracked chat sources, or both?

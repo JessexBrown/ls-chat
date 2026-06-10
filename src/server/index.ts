@@ -15,10 +15,11 @@ import { normalizeXFilteredStreamPost, normalizeXLiveCaptureMessage } from "./ad
 import { createDemoMessage } from "./demo";
 import { ChatHub } from "./hub";
 import { LiveSessionStore, liveSessionUpdateSchema } from "./liveSession";
+import { createNativeChatMessage, nativeChatInputSchema } from "./nativeChat";
+import { buildPublicDashboardConfig } from "./publicDashboard";
 import { SourceHub } from "./sourceHub";
 import { verifyKickSignature, verifyTwitchSignature, type RawBodyRequest } from "./security";
 import { subscribeKickChatWebhook } from "./workers/kickSubscriptions";
-import { buildStreamEmbedUrl } from "./streamEmbeds";
 import { IntegrationStatusStore } from "./workers/status";
 import { TwitchEventSubWorker } from "./workers/twitchEventSub";
 import { parseXRules, XFilteredStreamWorker } from "./workers/xFilteredStream";
@@ -45,6 +46,8 @@ const port = Number(process.env.PORT ?? 4200);
 const isProduction = process.env.NODE_ENV === "production";
 const messageHistoryLimit = parsePositiveIntegerEnv("CHAT_HISTORY_LIMIT", 500);
 const viewerPollMs = parsePositiveIntegerEnv("VIEWER_POLL_MS", 30000);
+const nativeChatRateLimit = parsePositiveIntegerEnv("NATIVE_CHAT_RATE_LIMIT", 8);
+const nativeChatRateWindowMs = parsePositiveIntegerEnv("NATIVE_CHAT_RATE_WINDOW_MS", 10000);
 const marketBubbleSourceId = "marketbubble:native-live";
 const publicStreamEmbedUrl = process.env.MARKETBUBBLE_STREAM_EMBED_URL ?? "";
 const publicStreamWatchUrl = process.env.MARKETBUBBLE_STREAM_WATCH_URL ?? "";
@@ -91,17 +94,13 @@ const statuses = new IntegrationStatusStore();
 const httpServer = createHttpServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 const publicViewerSockets = new Set<unknown>();
+const nativeChatRateBuckets = new Map<string, number[]>();
 
 const mockMessageSchema = z.object({
   platform: platformSchema.default("twitch"),
   username: z.string().min(1).default("localtester"),
   message: z.string().min(1),
   channelName: z.string().min(1).optional()
-});
-
-const nativeChatSchema = z.object({
-  username: z.string().trim().min(1).max(32).default("marketbubble-viewer"),
-  message: z.string().trim().min(1).max(500)
 });
 
 const kickSubscribeSchema = z.object({
@@ -364,6 +363,39 @@ function updateMarketBubbleViewerSource() {
     status: "live",
     detail: "Native dashboard viewers"
   });
+}
+
+function nativeChatClientId(req: Request) {
+  const forwardedFor = req.get("x-forwarded-for")?.split(",")[0]?.trim();
+  return forwardedFor || req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function canPostNativeChat(clientId: string) {
+  const now = Date.now();
+  const recentPosts = (nativeChatRateBuckets.get(clientId) ?? []).filter(
+    (timestamp) => now - timestamp < nativeChatRateWindowMs
+  );
+
+  if (recentPosts.length >= nativeChatRateLimit) {
+    nativeChatRateBuckets.set(clientId, recentPosts);
+    return false;
+  }
+
+  recentPosts.push(now);
+  nativeChatRateBuckets.set(clientId, recentPosts);
+
+  if (nativeChatRateBuckets.size > 1000) {
+    for (const [key, timestamps] of nativeChatRateBuckets.entries()) {
+      const activeTimestamps = timestamps.filter((timestamp) => now - timestamp < nativeChatRateWindowMs);
+      if (activeTimestamps.length === 0) {
+        nativeChatRateBuckets.delete(key);
+      } else {
+        nativeChatRateBuckets.set(key, activeTimestamps);
+      }
+    }
+  }
+
+  return true;
 }
 
 function parsePositiveIntegerEnv(name: string, fallback: number) {
@@ -1439,18 +1471,12 @@ function publicXConfig() {
 function publicDashboardConfig(req?: Request) {
   const host = req?.get("host") ?? `localhost:${port}`;
   const protocol = req?.protocol ?? "http";
-  const session = liveSessionStore.get();
-  const streamEmbedUrl = buildStreamEmbedUrl({
-    streamEmbedUrl: session.streamEmbedUrl,
-    streamWatchUrl: session.streamWatchUrl,
-    parentHost: host
+  return buildPublicDashboardConfig({
+    session: liveSessionStore.get(),
+    sources: sourceHub.snapshot(),
+    parentHost: host,
+    protocol
   });
-
-  return {
-    ...session,
-    streamEmbedUrl,
-    publicUrl: `${protocol}://${host}/live`
-  };
 }
 
 async function refreshTwitchViewerSources() {
@@ -1708,15 +1734,7 @@ app.put("/api/live-session", (req, res) => {
   updateMarketBubbleViewerSource();
   res.json({
     liveSession: session,
-    dashboard: {
-      ...session,
-      streamEmbedUrl: buildStreamEmbedUrl({
-        streamEmbedUrl: session.streamEmbedUrl,
-        streamWatchUrl: session.streamWatchUrl,
-        parentHost: req.get("host") ?? `localhost:${port}`
-      }),
-      publicUrl: `${req.protocol}://${req.get("host")}/live`
-    },
+    dashboard: publicDashboardConfig(req),
     sources: sourceHub.snapshot()
   });
 });
@@ -1769,35 +1787,20 @@ app.post("/api/mock/messages", (req, res) => {
 });
 
 app.post("/api/native-chat/messages", (req, res) => {
-  const parsed = nativeChatSchema.safeParse(req.body ?? {});
+  const parsed = nativeChatInputSchema.safeParse(req.body ?? {});
 
   if (!parsed.success) {
     return sendError(res, 400, "Invalid native chat message.");
   }
 
-  const now = new Date().toISOString();
-  const platformMessageId = `native-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  if (!canPostNativeChat(nativeChatClientId(req))) {
+    return sendError(res, 429, "Native chat rate limit exceeded.");
+  }
+
   const liveSession = liveSessionStore.get();
-  const message = chatMessageSchema.parse({
-    id: makeMessageId("marketbubble", platformMessageId),
-    platform: "marketbubble",
-    sourceKind: "chat",
-    platformMessageId,
-    platformUserId: parsed.data.username,
-    username: parsed.data.username,
-    displayName: parsed.data.username,
-    channelId: "marketbubble-native-live",
-    channelName: liveSession.nativeChatLabel,
-    sourceId: marketBubbleSourceId,
-    sourceLabel: liveSession.nativeChatLabel,
-    sourceUrl: liveSession.streamWatchUrl,
-    message: parsed.data.message,
-    fragments: [textFragment(parsed.data.message)],
-    badges: [{ label: "Native", type: "marketbubble-native", count: null }],
-    avatarUrl: null,
-    color: "#32d9c3",
-    sentAt: now,
-    receivedAt: now
+  const message = createNativeChatMessage(parsed.data, {
+    nativeChatLabel: liveSession.nativeChatLabel,
+    streamWatchUrl: liveSession.streamWatchUrl
   });
   const added = publish(message);
   res.status(added ? 201 : 200).json({ added, message });

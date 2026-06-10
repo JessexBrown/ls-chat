@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type Components, type ScrollerProps, type VirtuosoHandle } from "react-virtuoso";
-import type { ChatMessage, Platform, ViewerSnapshot } from "../shared/chat";
+import type { ChatMessage, Platform, StreamSource, ViewerSnapshot } from "../shared/chat";
 import { useChatStream } from "./useChatStream";
 
 const platformLabels: Record<Platform, string> = {
@@ -63,6 +63,14 @@ function initialVisualPreset(): VisualPreset {
 
   const stored = window.localStorage.getItem("ls-chat-visual-preset");
   return visualPresets.some((preset) => preset.id === stored) ? (stored as VisualPreset) : "marketbubble";
+}
+
+function initialNativeUsername() {
+  if (typeof window === "undefined") {
+    return "viewer";
+  }
+
+  return window.localStorage.getItem("ls-chat-native-username") ?? "viewer";
 }
 
 type ChatVirtuosoContext = {
@@ -200,6 +208,7 @@ type PublicDashboardConfig = {
   nativeChatLabel: string;
   streamEmbedUrl: string | null;
   streamWatchUrl: string | null;
+  streamSources?: StreamSource[];
   description?: string;
   updatedAt?: string;
   publicUrl: string;
@@ -277,6 +286,23 @@ function ViewerSummary({ snapshot }: { snapshot: ViewerSnapshot }) {
       </div>
     </div>
   );
+}
+
+function StreamSourceMark({ source }: { source: StreamSource }) {
+  if (source.platform) {
+    return <PlatformBadge platform={source.platform} />;
+  }
+
+  return <span className="stream-primary-badge">LIVE</span>;
+}
+
+function streamSourceMeta(source: StreamSource) {
+  const pieces = [
+    source.status === "live" ? "Live" : source.status === "offline" ? "Offline" : source.status === "connected" ? "Connected" : null,
+    source.viewerCount === null ? null : `${formatViewerCount(source.viewerCount)} viewers`
+  ].filter(Boolean);
+
+  return pieces.length > 0 ? pieces.join(" / ") : source.detail ?? "Feed available";
 }
 
 function MessageRow({ message }: { message: ChatMessage }) {
@@ -385,14 +411,20 @@ export function App() {
   const [mockText, setMockText] = useState("Testing the unified feed");
   const [mockPlatform, setMockPlatform] = useState<Platform>("twitch");
   const [publicConfig, setPublicConfig] = useState<PublicDashboardConfig | null>(null);
-  const [nativeUsername, setNativeUsername] = useState("viewer");
+  const [activeStreamSourceId, setActiveStreamSourceId] = useState(() => window.localStorage.getItem("ls-chat-active-stream-source") ?? "");
+  const [nativeUsername, setNativeUsername] = useState(() => initialNativeUsername());
   const [nativeMessage, setNativeMessage] = useState("");
+  const [nativeStatus, setNativeStatus] = useState("");
   const [visualPreset, setVisualPreset] = useState<VisualPreset>(() => initialVisualPreset());
 
   useEffect(() => {
     document.documentElement.dataset.theme = visualPreset;
     window.localStorage.setItem("ls-chat-visual-preset", visualPreset);
   }, [visualPreset]);
+
+  useEffect(() => {
+    window.localStorage.setItem("ls-chat-native-username", nativeUsername.trim() || "viewer");
+  }, [nativeUsername]);
 
   const loadHealth = useCallback(async () => {
     const response = await fetch("/api/health");
@@ -447,17 +479,23 @@ export function App() {
     }
 
     let active = true;
-    fetch("/api/public/config")
-      .then((response) => (response.ok ? response.json() : null))
-      .then((body: { dashboard?: PublicDashboardConfig } | null) => {
-        if (active && body?.dashboard) {
-          setPublicConfig(body.dashboard);
-        }
-      })
-      .catch(() => undefined);
+    const loadPublicConfig = () => {
+      fetch("/api/public/config")
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body: { dashboard?: PublicDashboardConfig } | null) => {
+          if (active && body?.dashboard) {
+            setPublicConfig(body.dashboard);
+          }
+        })
+        .catch(() => undefined);
+    };
+
+    loadPublicConfig();
+    const interval = window.setInterval(loadPublicConfig, 10000);
 
     return () => {
       active = false;
+      window.clearInterval(interval);
     };
   }, [isPublicDashboard]);
 
@@ -477,6 +515,52 @@ export function App() {
       return platformAllowed && queryAllowed;
     });
   }, [enabledPlatforms, messages, query]);
+
+  const streamSources = useMemo<StreamSource[]>(() => {
+    const configuredSources = publicConfig?.streamSources ?? [];
+    if (configuredSources.length > 0) {
+      return configuredSources;
+    }
+
+    if (publicConfig?.streamEmbedUrl || publicConfig?.streamWatchUrl) {
+      return [
+        {
+          id: "legacy:primary",
+          platform: null,
+          label: "Primary Feed",
+          embedUrl: publicConfig.streamEmbedUrl,
+          watchUrl: publicConfig.streamWatchUrl ?? publicConfig.streamEmbedUrl,
+          viewerCount: null,
+          status: "connected",
+          detail: publicConfig.description ?? null,
+          isPrimary: true
+        }
+      ];
+    }
+
+    return [];
+  }, [publicConfig]);
+
+  const activeStreamSource = useMemo(
+    () => streamSources.find((source) => source.id === activeStreamSourceId) ?? streamSources[0] ?? null,
+    [activeStreamSourceId, streamSources]
+  );
+
+  useEffect(() => {
+    if (!isPublicDashboard || streamSources.length === 0) {
+      return;
+    }
+
+    if (!activeStreamSourceId || !streamSources.some((source) => source.id === activeStreamSourceId)) {
+      setActiveStreamSourceId(streamSources[0].id);
+    }
+  }, [activeStreamSourceId, isPublicDashboard, streamSources]);
+
+  useEffect(() => {
+    if (activeStreamSourceId) {
+      window.localStorage.setItem("ls-chat-active-stream-source", activeStreamSourceId);
+    }
+  }, [activeStreamSourceId]);
 
   useEffect(() => {
     const previousCount = previousVisibleMessageCount.current;
@@ -554,6 +638,7 @@ export function App() {
       return;
     }
 
+    setNativeStatus("");
     const response = await fetch("/api/native-chat/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -565,7 +650,12 @@ export function App() {
 
     if (response.ok) {
       setNativeMessage("");
+      setNativeStatus("Sent");
+      window.setTimeout(() => setNativeStatus(""), 1800);
+      return;
     }
+
+    setNativeStatus(await responseErrorMessage(response, "Message failed."));
   }
 
   function togglePlatform(platform: Platform) {
@@ -580,6 +670,19 @@ export function App() {
       const currentIndex = visualPresets.findIndex((preset) => preset.id === current);
       return visualPresets[(currentIndex + 1) % visualPresets.length].id;
     });
+  }
+
+  function cycleStreamSource(direction: -1 | 1) {
+    if (streamSources.length === 0) {
+      return;
+    }
+
+    const currentIndex = Math.max(
+      0,
+      streamSources.findIndex((source) => source.id === activeStreamSource?.id)
+    );
+    const nextIndex = (currentIndex + direction + streamSources.length) % streamSources.length;
+    setActiveStreamSourceId(streamSources[nextIndex].id);
   }
 
   function updateTwitchBroadcasterLogin(value: string) {
@@ -803,11 +906,13 @@ export function App() {
   if (isPublicDashboard) {
     const dashboardTitle = publicConfig?.title ?? "MarketBubble Live";
     const dashboardDescription = publicConfig?.description ?? "";
-    const streamEmbedUrl = publicConfig?.streamEmbedUrl ?? null;
+    const streamEmbedUrl = activeStreamSource?.embedUrl ?? publicConfig?.streamEmbedUrl ?? null;
     const streamWatchUrl =
+      activeStreamSource?.watchUrl ??
       publicConfig?.streamWatchUrl ??
       sourceSnapshot.sources.find((source) => source.status === "live" && source.sourceUrl)?.sourceUrl ??
       null;
+    const activeStreamMeta = activeStreamSource ? streamSourceMeta(activeStreamSource) : "Feed unavailable";
 
     return (
       <main className="public-shell">
@@ -830,22 +935,60 @@ export function App() {
 
         <section className="public-live-grid">
           <section className="stream-stage" aria-label="Live stream">
-            {streamEmbedUrl ? (
-              <iframe src={streamEmbedUrl} title={dashboardTitle} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen />
-            ) : (
-              <div className="stream-placeholder">
-                <Radio size={30} aria-hidden="true" />
-                <strong>{dashboardTitle}</strong>
-                {streamWatchUrl ? (
-                  <a className="stream-link" href={streamWatchUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink size={15} aria-hidden="true" />
-                    Open stream
-                  </a>
-                ) : (
-                  <span>Stream embed unavailable</span>
-                )}
+            {streamSources.length > 0 ? (
+              <div className="stream-source-console">
+                <div className="stream-now">
+                  {activeStreamSource ? <StreamSourceMark source={activeStreamSource} /> : null}
+                  <div>
+                    <span>Watching</span>
+                    <strong>{activeStreamSource?.label ?? "Primary Feed"}</strong>
+                  </div>
+                  <em>{activeStreamMeta}</em>
+                </div>
+                <div className="stream-source-controls">
+                  <button className="icon-button" type="button" title="Previous stream source" onClick={() => cycleStreamSource(-1)}>
+                    <ChevronLeft size={16} aria-hidden="true" />
+                  </button>
+                  <div className="stream-source-tabs" role="tablist" aria-label="Stream sources">
+                    {streamSources.map((source) => (
+                      <button
+                        className={`stream-source-tab ${source.id === activeStreamSource?.id ? "stream-source-tab-active" : ""}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={source.id === activeStreamSource?.id}
+                        title={`${source.label} / ${streamSourceMeta(source)}`}
+                        key={source.id}
+                        onClick={() => setActiveStreamSourceId(source.id)}
+                      >
+                        <StreamSourceMark source={source} />
+                        <span>{source.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button className="icon-button" type="button" title="Next stream source" onClick={() => cycleStreamSource(1)}>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
-            )}
+            ) : null}
+            <div className="stream-frame">
+              {streamEmbedUrl ? (
+                <iframe src={streamEmbedUrl} title={dashboardTitle} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen />
+              ) : (
+                <div className="stream-placeholder">
+                  <Radio size={30} aria-hidden="true" />
+                  <strong>{activeStreamSource?.label ?? dashboardTitle}</strong>
+                  {streamWatchUrl ? (
+                    <a className="stream-link" href={streamWatchUrl} target="_blank" rel="noreferrer">
+                      <ExternalLink size={15} aria-hidden="true" />
+                      Open stream
+                    </a>
+                  ) : (
+                    <span>Stream embed unavailable</span>
+                  )}
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="public-chat-panel" aria-label="Combined live chat">
@@ -866,12 +1009,25 @@ export function App() {
                 void sendNativeMessage();
               }}
             >
-              <input value={nativeUsername} onChange={(event) => setNativeUsername(event.target.value)} aria-label="Native chat username" />
-              <input value={nativeMessage} onChange={(event) => setNativeMessage(event.target.value)} aria-label="Native chat message" />
+              <input
+                value={nativeUsername}
+                onChange={(event) => setNativeUsername(event.target.value)}
+                aria-label="Native chat username"
+                placeholder="Name"
+                maxLength={32}
+              />
+              <input
+                value={nativeMessage}
+                onChange={(event) => setNativeMessage(event.target.value)}
+                aria-label="Native chat message"
+                placeholder="Chat on MarketBubble"
+                maxLength={500}
+              />
               <button className="primary-button" type="submit">
                 <Send size={15} aria-hidden="true" />
                 Send
               </button>
+              {nativeStatus ? <span className="native-status">{nativeStatus}</span> : null}
             </form>
           </section>
         </section>

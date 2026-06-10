@@ -94,6 +94,15 @@ Publishes a first-party MarketBubble native chat message into the same normalize
 }
 ```
 
+The endpoint trims usernames/messages, caps usernames at 32 characters, caps messages at 500 characters, and applies a small in-memory per-client rate limit. Defaults:
+
+```text
+NATIVE_CHAT_RATE_LIMIT=8
+NATIVE_CHAT_RATE_WINDOW_MS=10000
+```
+
+When the rate limit is exceeded, the endpoint returns `429`.
+
 ### `GET /api/messages`
 
 Returns the recent normalized message snapshot.
@@ -104,7 +113,47 @@ Returns the current viewer/source snapshot, including combined known viewer coun
 
 ### `GET /api/public/config`
 
-Returns public dashboard configuration for `/live`, including the configured stream embed URL and current source snapshot.
+Returns public dashboard configuration for `/live`, including the configured stream embed URL, switchable stream sources, and current source snapshot.
+
+`streamEmbedUrl` remains available for older clients. New viewer surfaces should prefer `streamSources`.
+
+```json
+{
+  "dashboard": {
+    "title": "MarketBubble Live",
+    "nativeChatLabel": "MarketBubble",
+    "streamEmbedUrl": "https://player.twitch.tv/?channel=jynxzi&parent=marketbubble.com&autoplay=false",
+    "streamWatchUrl": "https://www.twitch.tv/jynxzi",
+    "streamSources": [
+      {
+        "id": "session:primary",
+        "platform": null,
+        "label": "Primary Feed",
+        "embedUrl": "https://player.twitch.tv/?channel=jynxzi&parent=marketbubble.com&autoplay=false",
+        "watchUrl": "https://www.twitch.tv/jynxzi",
+        "viewerCount": null,
+        "status": "connected",
+        "detail": "Shared live show",
+        "isPrimary": true
+      },
+      {
+        "id": "source:kick:123",
+        "platform": "kick",
+        "label": "jynxzi",
+        "embedUrl": "https://player.kick.com/jynxzi",
+        "watchUrl": "https://kick.com/jynxzi",
+        "viewerCount": 1200,
+        "status": "live",
+        "detail": "Kick stream title",
+        "isPrimary": false
+      }
+    ],
+    "publicUrl": "https://marketbubble.com/live"
+  }
+}
+```
+
+The server builds `streamSources` from the configured primary feed plus tracked external chat/viewer sources. Twitch and Kick watch URLs are normalized into embeddable player URLs when possible. Watch-only sources remain available as external links when embedding is not reliable.
 
 ### `GET /api/live-session`
 
