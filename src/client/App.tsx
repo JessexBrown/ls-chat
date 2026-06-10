@@ -1,5 +1,6 @@
 import {
   ArrowDown,
+  BarChart3,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -335,6 +336,10 @@ function formatViewerCount(value: number) {
   }).format(value);
 }
 
+function formatPercent(value: number) {
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: value < 10 ? 1 : 0 }).format(value)}%`;
+}
+
 function sourceTitle(message: ChatMessage) {
   const sourceLabel = message.sourceLabel ?? message.channelName ?? platformLabels[message.platform];
   return `${platformLabels[message.platform]} / ${sourceLabel}`;
@@ -394,6 +399,32 @@ function streamSourceMeta(source: StreamSource) {
 
 function isDevelopmentStreamSource(source: StreamSource) {
   return source.id.startsWith("local-dev:") || source.id.includes(":local-dev") || source.label.trim().toLowerCase() === "local development";
+}
+
+function MessageContent({ message }: { message: ChatMessage }) {
+  const fragments = message.fragments.length > 0 ? message.fragments : [{ type: "text" as const, text: message.message, url: null }];
+
+  return (
+    <span className="message-text">
+      {fragments.map((fragment, index) => {
+        const key = `${index}:${fragment.type}:${fragment.text}`;
+
+        if (fragment.type === "emote" && fragment.url) {
+          return (
+            <span className="message-emote-wrap" key={key} title={fragment.text}>
+              <img className="message-emote" src={fragment.url} alt={fragment.text} loading="lazy" referrerPolicy="no-referrer" />
+            </span>
+          );
+        }
+
+        return (
+          <span className={`message-fragment message-fragment-${fragment.type}`} key={key}>
+            {fragment.text}
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 function MessageRow({ message }: { message: ChatMessage }) {
@@ -456,7 +487,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
           </span>
         </span>
         <span className="message-separator">:</span>
-        <span className="message-text">{message.message}</span>
+        <MessageContent message={message} />
       </div>
     </article>
   );
@@ -530,6 +561,7 @@ export function App() {
   const [lockedMessages, setLockedMessages] = useState<ChatMessage[] | null>(null);
   const [newMessagesAway, setNewMessagesAway] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const [activeSettingsPlatform, setActiveSettingsPlatform] = useState<Exclude<Platform, "marketbubble">>("twitch");
   const [broadcasterLogin, setBroadcasterLogin] = useState("");
   const [kickBroadcaster, setKickBroadcaster] = useState("");
@@ -648,6 +680,133 @@ export function App() {
 
   const liveVisibleMessages = isPublicDashboard ? messages : filteredMessages;
   const displayedMessages = lockedMessages ?? liveVisibleMessages;
+
+  const statsSnapshot = useMemo(() => {
+    const platformMessageCounts = Object.fromEntries(platformOrder.map((platform) => [platform, 0])) as Record<Platform, number>;
+    const platformChatters = Object.fromEntries(platformOrder.map((platform) => [platform, new Set<string>()])) as Record<Platform, Set<string>>;
+    const platformViewerCounts = Object.fromEntries(platformOrder.map((platform) => [platform, 0])) as Record<Platform, number>;
+    const sourceRows = new Map<
+      string,
+      {
+        id: string;
+        platform: Platform;
+        label: string;
+        messageCount: number;
+        chatters: Set<string>;
+        viewerCount: number | null;
+        status: string;
+      }
+    >();
+    const chatterRows = new Map<
+      string,
+      {
+        key: string;
+        displayName: string;
+        username: string;
+        platform: Platform;
+        count: number;
+        sources: Set<string>;
+      }
+    >();
+    const now = Date.now();
+    const recentWindowMs = 5 * 60 * 1000;
+    let recentMessageCount = 0;
+
+    for (const source of sourceSnapshot.sources) {
+      if (source.viewerCount !== null) {
+        platformViewerCounts[source.platform] += source.viewerCount;
+      }
+
+      sourceRows.set(source.id, {
+        id: source.id,
+        platform: source.platform,
+        label: source.label,
+        messageCount: 0,
+        chatters: new Set<string>(),
+        viewerCount: source.viewerCount,
+        status: source.status
+      });
+    }
+
+    for (const message of messages) {
+      platformMessageCounts[message.platform] += 1;
+      const chatterKey = `${message.platform}:${message.platformUserId ?? message.username.toLowerCase()}`;
+      const sourceLabel = message.sourceLabel ?? message.channelName ?? platformLabels[message.platform];
+      const sourceId = message.sourceId ?? `${message.platform}:${sourceLabel.toLowerCase()}`;
+      const displayName = message.displayName ?? message.username;
+      platformChatters[message.platform].add(chatterKey);
+
+      const sentAt = new Date(message.sentAt ?? message.receivedAt).getTime();
+      if (!Number.isNaN(sentAt) && now - sentAt <= recentWindowMs) {
+        recentMessageCount += 1;
+      }
+
+      const sourceRow =
+        sourceRows.get(sourceId) ??
+        {
+          id: sourceId,
+          platform: message.platform,
+          label: sourceLabel,
+          messageCount: 0,
+          chatters: new Set<string>(),
+          viewerCount: null,
+          status: "connected"
+        };
+      sourceRow.messageCount += 1;
+      sourceRow.chatters.add(chatterKey);
+      sourceRows.set(sourceId, sourceRow);
+
+      const chatterRow =
+        chatterRows.get(chatterKey) ??
+        {
+          key: chatterKey,
+          displayName,
+          username: message.username,
+          platform: message.platform,
+          count: 0,
+          sources: new Set<string>()
+        };
+      chatterRow.count += 1;
+      chatterRow.sources.add(sourceLabel);
+      chatterRows.set(chatterKey, chatterRow);
+    }
+
+    const totalMessages = messages.length;
+    const uniqueChatters = new Set(Array.from(chatterRows.keys())).size;
+    const totalKnownViewers = sourceSnapshot.totalKnownViewers;
+
+    return {
+      totalMessages,
+      uniqueChatters,
+      messagesPerMinute: recentMessageCount / 5,
+      totalKnownViewers,
+      unknownSourceCount: sourceSnapshot.unknownSourceCount,
+      platformRows: platformOrder.map((platform) => ({
+        platform,
+        messageCount: platformMessageCounts[platform],
+        messagePercent: totalMessages > 0 ? (platformMessageCounts[platform] / totalMessages) * 100 : 0,
+        chatterCount: platformChatters[platform].size,
+        viewerCount: platformViewerCounts[platform],
+        viewerPercent: totalKnownViewers > 0 ? (platformViewerCounts[platform] / totalKnownViewers) * 100 : 0
+      })),
+      sourceRows: Array.from(sourceRows.values())
+        .map((source) => ({
+          ...source,
+          chatterCount: source.chatters.size,
+          messagePercent: totalMessages > 0 ? (source.messageCount / totalMessages) * 100 : 0,
+          viewerPercent: totalKnownViewers > 0 && source.viewerCount !== null ? (source.viewerCount / totalKnownViewers) * 100 : 0
+        }))
+        .sort((left, right) => (right.viewerCount ?? 0) - (left.viewerCount ?? 0) || right.messageCount - left.messageCount),
+      topChatters: Array.from(chatterRows.values())
+        .sort((left, right) => right.count - left.count)
+        .slice(0, 8)
+        .map((chatter) => ({
+          ...chatter,
+          sourceCount: chatter.sources.size,
+          sourceLabel: Array.from(chatter.sources).slice(0, 2).join(", ")
+        }))
+    };
+  }, [messages, sourceSnapshot]);
 
   const streamSources = useMemo<StreamSource[]>(() => {
     const configuredSources = (publicConfig?.streamSources ?? []).filter((source) => !isDevelopmentStreamSource(source));
@@ -1260,7 +1419,7 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className={`chat-shell ${settingsOpen ? "chat-shell-settings-open" : ""}`}>
+      <section className={`chat-shell ${settingsOpen || statsOpen ? "chat-shell-settings-open" : ""}`}>
         <header className="chat-header">
           <div className="chat-title">
             <div className="chat-title-row">
@@ -1315,12 +1474,28 @@ export function App() {
               {paused ? <Play size={17} aria-hidden="true" /> : <Pause size={17} aria-hidden="true" />}
             </button>
             <button
+              className={`icon-button ${statsOpen ? "icon-button-active" : ""}`}
+              type="button"
+              title="Stats dashboard"
+              aria-label="Stats dashboard"
+              aria-pressed={statsOpen}
+              onClick={() => {
+                setStatsOpen((value) => !value);
+                setSettingsOpen(false);
+              }}
+            >
+              <BarChart3 size={17} aria-hidden="true" />
+            </button>
+            <button
               className={`icon-button ${settingsOpen ? "icon-button-active" : ""}`}
               type="button"
               title="Source settings"
               aria-label="Source settings"
               aria-pressed={settingsOpen}
-              onClick={() => setSettingsOpen((value) => !value)}
+              onClick={() => {
+                setSettingsOpen((value) => !value);
+                setStatsOpen(false);
+              }}
             >
               <Settings size={17} aria-hidden="true" />
             </button>
@@ -1708,6 +1883,135 @@ export function App() {
                 {settingsMessage}
               </div>
             ) : null}
+          </section>
+        ) : statsOpen ? (
+          <section className="stats-page" aria-label="Live stats dashboard">
+            <div className="stats-page-header">
+              <div className="settings-page-title">
+                <BarChart3 size={18} aria-hidden="true" />
+                <div>
+                  <h2>Live Stats</h2>
+                  <span>Viewer share, message flow, sources, and retained chat activity</span>
+                </div>
+              </div>
+              <div className="settings-meta">
+                <span>{connectionState}</span>
+                <span>{sourceSnapshot.sources.length} sources</span>
+                <span>{statsSnapshot.unknownSourceCount} unknown viewer counts</span>
+              </div>
+            </div>
+
+            <div className="stats-grid">
+              <section className="stats-kpi">
+                <span>Known Viewers</span>
+                <strong>{formatViewerCount(statsSnapshot.totalKnownViewers)}</strong>
+              </section>
+              <section className="stats-kpi">
+                <span>Retained Messages</span>
+                <strong>{formatViewerCount(statsSnapshot.totalMessages)}</strong>
+              </section>
+              <section className="stats-kpi">
+                <span>Unique Chatters</span>
+                <strong>{formatViewerCount(statsSnapshot.uniqueChatters)}</strong>
+              </section>
+              <section className="stats-kpi">
+                <span>Messages / Min</span>
+                <strong>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(statsSnapshot.messagesPerMinute)}</strong>
+              </section>
+            </div>
+
+            <div className="stats-panels">
+              <section className="stats-panel">
+                <div className="stats-panel-heading">
+                  <strong>Platform Breakdown</strong>
+                  <span>Viewer share and chat share</span>
+                </div>
+                <div className="stats-platform-list">
+                  {statsSnapshot.platformRows.map((row) => (
+                    <div className="stats-platform-row" key={row.platform}>
+                      <div className="stats-row-title">
+                        <PlatformBadge platform={row.platform} />
+                        <strong>{platformLabels[row.platform]}</strong>
+                        <span>{row.chatterCount} chatters</span>
+                      </div>
+                      <div className="stats-meter-group">
+                        <div className="stats-meter-line">
+                          <span>{formatViewerCount(row.viewerCount)} viewers</span>
+                          <strong>{formatPercent(row.viewerPercent)}</strong>
+                          <div className="stats-meter">
+                            <span style={{ width: `${Math.min(row.viewerPercent, 100)}%` }} />
+                          </div>
+                        </div>
+                        <div className="stats-meter-line">
+                          <span>{formatViewerCount(row.messageCount)} messages</span>
+                          <strong>{formatPercent(row.messagePercent)}</strong>
+                          <div className="stats-meter stats-meter-muted">
+                            <span style={{ width: `${Math.min(row.messagePercent, 100)}%` }} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="stats-panel">
+                <div className="stats-panel-heading">
+                  <strong>Source Breakdown</strong>
+                  <span>Tracked stream and chat sources</span>
+                </div>
+                <div className="stats-source-list">
+                  {statsSnapshot.sourceRows.length > 0 ? (
+                    statsSnapshot.sourceRows.map((source) => (
+                      <div className="stats-source-row" key={source.id}>
+                        <div className="stats-row-title">
+                          <PlatformBadge platform={source.platform} />
+                          <strong>{source.label}</strong>
+                          <span>{source.status}</span>
+                        </div>
+                        <div className="stats-source-metrics">
+                          <span>{source.viewerCount === null ? "unknown viewers" : `${formatViewerCount(source.viewerCount)} viewers`}</span>
+                          <span>{formatViewerCount(source.messageCount)} messages</span>
+                          <span>{source.chatterCount} chatters</span>
+                        </div>
+                        <div className="stats-meter">
+                          <span style={{ width: `${Math.min(Math.max(source.viewerPercent, source.messagePercent), 100)}%` }} />
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <span className="stats-empty">No active source records yet.</span>
+                  )}
+                </div>
+              </section>
+
+              <section className="stats-panel stats-panel-wide">
+                <div className="stats-panel-heading">
+                  <strong>Top Chatters</strong>
+                  <span>Based on the retained chat buffer</span>
+                </div>
+                <div className="stats-chatter-list">
+                  {statsSnapshot.topChatters.length > 0 ? (
+                    statsSnapshot.topChatters.map((chatter) => (
+                      <div className="stats-chatter-row" key={chatter.key}>
+                        <div className="stats-row-title">
+                          <PlatformBadge platform={chatter.platform} />
+                          <strong>{chatter.displayName}</strong>
+                          <span>{chatter.sourceLabel || platformLabels[chatter.platform]}</span>
+                        </div>
+                        <div className="stats-source-metrics">
+                          <span>{formatViewerCount(chatter.count)} messages</span>
+                          <span>{chatter.sourceCount} sources</span>
+                          <span>@{chatter.username}</span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <span className="stats-empty">No chatters in the retained buffer yet.</span>
+                  )}
+                </div>
+              </section>
+            </div>
           </section>
         ) : (
           <>

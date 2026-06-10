@@ -7,11 +7,17 @@ import {
   type MessageFragment
 } from "../../shared/chat";
 
+const twitchEmoteSchema = z
+  .object({
+    id: z.string()
+  })
+  .passthrough();
+
 const twitchFragmentSchema = z
   .object({
     type: z.string(),
     text: z.string(),
-    emote: z.unknown().nullable().optional(),
+    emote: twitchEmoteSchema.nullable().optional(),
     mention: z.unknown().nullable().optional(),
     cheermote: z.unknown().nullable().optional()
   })
@@ -53,8 +59,20 @@ export const twitchEventSubPayloadSchema = z
   })
   .passthrough();
 
+function twitchEmoteUrl(emoteId: string) {
+  return `https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(emoteId)}/default/dark/1.0`;
+}
+
 function normalizeFragment(fragment: z.infer<typeof twitchFragmentSchema>): MessageFragment {
-  if (fragment.type === "emote" || fragment.type === "mention" || fragment.type === "cheermote") {
+  if (fragment.type === "emote") {
+    return {
+      type: "emote",
+      text: fragment.text,
+      url: fragment.emote?.id ? twitchEmoteUrl(fragment.emote.id) : null
+    };
+  }
+
+  if (fragment.type === "mention" || fragment.type === "cheermote") {
     return {
       type: fragment.type,
       text: fragment.text,

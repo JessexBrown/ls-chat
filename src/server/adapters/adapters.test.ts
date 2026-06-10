@@ -26,6 +26,33 @@ describe("platform adapters", () => {
     expect(message?.username).toBe("twitchdev");
   });
 
+  it("normalizes Twitch emote fragments with renderable image URLs", () => {
+    const message = normalizeTwitchChatMessage({
+      subscription: { type: "channel.chat.message" },
+      event: {
+        broadcaster_user_id: "12826",
+        broadcaster_user_login: "twitch",
+        broadcaster_user_name: "Twitch",
+        chatter_user_id: "141981764",
+        chatter_user_login: "twitchdev",
+        chatter_user_name: "TwitchDev",
+        message_id: "emote-message",
+        message: {
+          text: "Kappa",
+          fragments: [{ type: "emote", text: "Kappa", emote: { id: "25", emote_set_id: "0", owner_id: "0" } }]
+        },
+        color: "#00FF7F",
+        badges: []
+      }
+    });
+
+    expect(message?.fragments[0]).toMatchObject({
+      type: "emote",
+      text: "Kappa",
+      url: "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0"
+    });
+  });
+
   it("normalizes Kick chat messages", () => {
     const message = normalizeKickChatMessage({
       message_id: "unique_message_id_123",

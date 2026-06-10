@@ -64,6 +64,27 @@ Use a 390px wide viewport:
 4. Confirm the chat panel remains visible beneath the stream.
 5. Confirm the native chat composer keeps the assigned guest identity, message field, and send button usable.
 
+## Admin Stats Functional Test
+
+1. Open the operator console at `/`.
+2. Click the stats dashboard button in the header.
+3. Confirm Known Viewers, Retained Messages, Unique Chatters, and Messages / Min are visible.
+4. Confirm Platform Breakdown shows Twitch, Kick, X, and MarketBubble rows with viewer and message percentages.
+5. Confirm Source Breakdown shows active tracked sources and native MarketBubble when public viewers are connected.
+6. Send or receive messages from at least two platforms and confirm the message percentages update without refreshing.
+7. Return to chat and confirm the main chat remains connected and still follows new messages.
+
+## Dev Console Check
+
+In local development:
+
+1. Restart the dev server after server-side changes.
+2. Open `/` and `/live` in fresh tabs.
+3. Confirm there are no Vite HMR websocket errors.
+4. Confirm the app websocket at `/ws` remains connected and chat updates still arrive.
+
+The app websocket must only handle `/ws` upgrades. Vite HMR and any future websocket endpoints need to be able to receive their own upgrade requests without the chat socket rejecting them.
+
 ## Production Gaps To Close
 
 The current native chat path is functional, but not fully production-hardened.
@@ -75,6 +96,10 @@ The current native chat path is functional, but not fully production-hardened.
 - Add durable storage for native chat history if MarketBubble wants replay, analytics, or post-show archives.
 - Add structured logs and metrics for native chat send failures, rate-limit hits, WebSocket fan-out, and source switching.
 - Confirm reverse proxy behavior before production. If using `x-forwarded-for`, configure Express/proxy trust deliberately so native chat rate limiting sees the correct client IP.
+- Protect the operator console with authentication before exposing the app outside local development.
+- Persist viewer-count samples and chat activity if MarketBubble needs durable stats, analytics, or post-show reports.
+- Review content security policy, iframe policy, and allowed origins when embedding the public hub in the MarketBubble production site.
+- Define an emote policy before rendering remote platform images at scale.
 
 ## Product Insight
 

@@ -33,6 +33,8 @@ type ChatMessage = {
 
 The source fields identify the stream or broadcaster origin independently of the chatter identity. They are used by compact chat labels and the combined viewer-count breakdown.
 
+`fragments` are the rich rendering contract for chat text. Plain messages can provide one `text` fragment. Platform emotes should use `type: "emote"` with a safe image `url` when the adapter can derive one. The client renders emote image fragments inline and falls back to fragment text for non-image fragments.
+
 ## Viewer Source Shape
 
 The server also publishes source snapshots:

@@ -92,7 +92,7 @@ const liveSessionStore = new LiveSessionStore({
 });
 const statuses = new IntegrationStatusStore();
 const httpServer = createHttpServer(app);
-const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+const wss = new WebSocketServer({ noServer: true });
 const publicViewerSockets = new Set<unknown>();
 const nativeChatRateBuckets = new Map<string, number[]>();
 
@@ -2602,6 +2602,17 @@ wss.on("connection", (socket, request) => {
       publicViewerSockets.delete(socket);
       updateMarketBubbleViewerSource();
     }
+  });
+});
+
+httpServer.on("upgrade", (request, socket, head) => {
+  const socketUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+  if (socketUrl.pathname !== "/ws") {
+    return;
+  }
+
+  wss.handleUpgrade(request, socket, head, (webSocket) => {
+    wss.emit("connection", webSocket, request);
   });
 });
 

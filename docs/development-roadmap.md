@@ -36,6 +36,7 @@ Last updated: 2026-06-10
 - Add source-level visibility controls for public dashboard sessions.
 - Add reliable X viewer-count capture if technically feasible.
 - Add event/session configuration for multiple named MarketBubble broadcasts.
+- Expand the admin stats dashboard from retained-buffer metrics into persisted live-session analytics.
 
 ## Phase 5: Persistence and Operations
 
@@ -44,14 +45,16 @@ Last updated: 2026-06-10
 - Add structured logs and metrics.
 - Add replay of recent messages on client reconnect.
 - Add deployment-ready Docker Compose.
+- Persist viewer-count samples, source-switch events, native chat sends, and moderation actions for post-show reporting.
 
 ## Phase 6: Moderation and Production Features
 
 - Normalize deletion, timeout, ban, and clear-chat events.
-- Add per-platform display options for emotes and badges.
+- Add per-platform emote parsing, image rendering, and display options for emotes and badges.
 - Add role-based access if the app becomes multi-user.
 - Add retention controls.
 - Add audit trails for integration changes.
+- Add account-backed or signed-session identity for MarketBubble native chat.
 
 ## Phase 7: Scale and Polish
 

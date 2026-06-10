@@ -77,8 +77,62 @@ The current implementation adds:
 - stream player reload/open controls for embed recovery
 - stable local guest IDs for unauthenticated native chat
 - compact chat rows that keep platform/source visible and move badge details into hover metadata
+- admin stats dashboard with platform message share, viewer share, source breakdowns, and top chatters from retained messages
 
 Live Session settings are stored in `LIVE_SESSION_FILE`, defaulting to `.data/live-session.json`. Environment variables still provide first-boot defaults for dashboard title, native chat label, and stream URLs.
+
+## Admin Stats Dashboard
+
+The operator console should include a dedicated stats view so admins can inspect the live room without crowding the main chat. The current slice uses in-memory data that is already available to the client:
+
+- known viewer total and unknown-count source total
+- retained message count
+- unique retained chatter count
+- recent messages per minute
+- platform-level viewer and message percentages
+- source-level viewer, message, and chatter counts
+- top retained chatters by message volume
+
+This is useful for live operations, but it is not yet a durable analytics system. Production analytics should persist session events, viewer samples, native chat sends, source switching, moderation actions, and platform message counts to a database so MarketBubble can review post-show performance instead of only seeing the current retained buffer.
+
+## Emotes and Rich Chat
+
+Platform emotes should be supported because they make the shared chat feel alive and closer to what viewers expect from Twitch and Kick. The normalized `ChatMessage.fragments` field is the right display contract for this. The path should be:
+
+- Twitch: map EventSub `message.fragments` emote fragments into normalized fragments with image URLs from Twitch CDN templates.
+- Kick: inspect webhook message payloads for emote metadata and map emote tokens to stable image URLs when available.
+- X: keep text-first unless the livechat capture can reliably identify emoji, stickers, or embedded media without brittle DOM assumptions.
+- MarketBubble: start with Unicode emoji, then add first-party emote packs only after account identity and moderation exist.
+
+Rendering rules should keep high-volume chat dense. Emotes should display inline at chat-line height, avoid layout jumps, lazy-load images, and fall back to text if an emote URL fails. Admin settings should eventually allow disabling external emote images for performance or moderation.
+
+## Production Site Workflow
+
+The intended production workflow should separate public viewers from operators:
+
+1. Operators authenticate in the admin console, connect Twitch/Kick OAuth, and configure X livechat capture targets.
+2. Operators choose the active MarketBubble live session, stream sources, public dashboard title, and native chat label.
+3. The MarketBubble site embeds or hosts the public `/live` experience as the viewer destination.
+4. Viewers choose their preferred playback source while remaining in the shared MarketBubble chat room.
+5. External platform chats flow into the shared room as labeled inputs; MarketBubble native chat becomes the canonical first-party conversation.
+6. The admin console monitors source health, viewer totals, stats, and moderation.
+
+For production, the public viewer surface should not expose integration controls, environment status, raw errors, OAuth actions, or capture tooling. Admin routes should be protected behind real authentication before deployment outside local development.
+
+## Security and Moderation Expectations
+
+Native chat is the highest-risk surface because it accepts public user input directly into the MarketBubble room. Before production launch, it needs:
+
+- account-backed or signed-session identity
+- durable rate limiting shared across app instances
+- moderation actions for delete, timeout, ban, and message hold
+- blocked terms, duplicate-message controls, and link restrictions
+- audit logs for admin actions and integration changes
+- careful reverse-proxy trust configuration for client IP handling
+- CSP and iframe policy review for the embedded public site
+- secret isolation for OAuth tokens, webhook secrets, X capture tokens, and session files
+
+Until those exist, unauthenticated native chat should be treated as a functional prototype with basic rate limiting, not as a fully trusted production community system.
 
 ## Visual Direction
 
@@ -93,3 +147,5 @@ MarketBubble's public site is a dark Framer-built brand experience using high-co
 - Should the dashboard support multiple named events or one global MarketBubble live room?
 - Should stream source choices be operator-curated per event, auto-derived from tracked chat sources, or both?
 - Should external platform badges be configurable per viewer, moderator-only, or only visible on hover?
+- Which emote providers are acceptable for production, and should admins be able to disable remote emote images?
+- Which stats should be public-facing versus admin-only?
