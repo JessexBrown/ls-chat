@@ -84,6 +84,7 @@ function shortNativeClientId(value: string) {
 
 type ChatVirtuosoContext = {
   onScrollPositionChange: (scrollTop: number) => void;
+  onUserScrollIntent: () => void;
 };
 
 const virtuosoComponents: Components<ChatMessage, ChatVirtuosoContext> = {
@@ -97,6 +98,24 @@ const virtuosoComponents: Components<ChatMessage, ChatVirtuosoContext> = {
         ref={ref}
         onScroll={(event) => {
           context.onScrollPositionChange(event.currentTarget.scrollTop);
+        }}
+        onWheel={(event) => {
+          if (event.deltaY < -1) {
+            context.onUserScrollIntent();
+          }
+        }}
+        onTouchStart={() => {
+          context.onUserScrollIntent();
+        }}
+        onPointerDown={(event) => {
+          if (event.target === event.currentTarget) {
+            context.onUserScrollIntent();
+          }
+        }}
+        onKeyDown={(event) => {
+          if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
+            context.onUserScrollIntent();
+          }
         }}
       />
     );
@@ -394,13 +413,13 @@ function MessageRow({ message }: { message: ChatMessage }) {
 
   return (
     <article className={`message-row message-row-${message.platform}`}>
-      <div className="message-line" onMouseEnter={() => setMetadataOpen(true)} onMouseLeave={() => setMetadataOpen(false)}>
+      <div className="message-line">
         <PlatformBadge platform={message.platform} />
         <time className="message-time">{formatTime(message.sentAt ?? message.receivedAt)}</time>
         <span className="message-channel" title={originLabel}>
           {sourceLabel}
         </span>
-        <span className="message-identity">
+        <span className="message-identity" onMouseEnter={() => setMetadataOpen(true)} onMouseLeave={() => setMetadataOpen(false)}>
           <span
             className="message-username"
             title={usernameTitle}
@@ -412,11 +431,28 @@ function MessageRow({ message }: { message: ChatMessage }) {
           >
             {displayName}
           </span>
-          <span className={`message-hover-card ${metadataOpen ? "message-hover-card-visible" : ""}`} role="tooltip">
-            <strong>{displayName}</strong>
-            <span>{platformLabels[message.platform]} / {sourceLabel}</span>
-            <span>ID: {platformUserId}</span>
-            {badgeTitle ? <span>Badges: {badgeTitle}</span> : null}
+          <span className={`message-hover-card message-hover-card-${message.platform} ${metadataOpen ? "message-hover-card-visible" : ""}`} role="tooltip">
+            <span className="message-hover-card-top">
+              <PlatformBadge platform={message.platform} />
+              <span>
+                <strong>{displayName}</strong>
+                <span>{sourceLabel}</span>
+              </span>
+            </span>
+            <span className="message-hover-card-meta">
+              <span>Platform</span>
+              <strong>{platformLabels[message.platform]}</strong>
+            </span>
+            <span className="message-hover-card-meta">
+              <span>User ID</span>
+              <strong>{platformUserId}</strong>
+            </span>
+            {badgeTitle ? (
+              <span className="message-hover-card-meta">
+                <span>Badges</span>
+                <strong>{badgeTitle}</strong>
+              </span>
+            ) : null}
           </span>
         </span>
         <span className="message-separator">:</span>
@@ -472,6 +508,8 @@ export function App() {
   const previousVisibleMessageCount = useRef(0);
   const previousLiveMessageIds = useRef<string[]>([]);
   const lastScrollTop = useRef(0);
+  const userScrollIntentUntil = useRef(0);
+  const suppressScrollLockUntil = useRef(0);
   const readingLockedRef = useRef(false);
   const twitchBroadcasterEdited = useRef(false);
   const kickBroadcasterEdited = useRef(false);
@@ -685,6 +723,7 @@ export function App() {
 
   const releaseChatLock = useCallback(
     (behavior: "auto" | "smooth" = "auto", clearPaused = true) => {
+      suppressScrollLockUntil.current = Date.now() + 1000;
       readingLockedRef.current = false;
       setReadingLocked(false);
       if (clearPaused) {
@@ -707,13 +746,19 @@ export function App() {
     [liveVisibleMessages.length]
   );
 
+  const markUserScrollIntent = useCallback(() => {
+    userScrollIntentUntil.current = Date.now() + 1200;
+  }, []);
+
   const handleChatScroll = useCallback(
     (scrollTop: number) => {
       const previousScrollTop = lastScrollTop.current;
       const delta = scrollTop - previousScrollTop;
       lastScrollTop.current = scrollTop;
+      const now = Date.now();
+      const isUserScroll = now <= userScrollIntentUntil.current && now > suppressScrollLockUntil.current;
 
-      if (delta < -1 && !lockedMessages) {
+      if (delta < -1 && isUserScroll && !lockedMessages) {
         lockChat("scroll");
       }
     },
@@ -722,9 +767,10 @@ export function App() {
 
   const chatVirtuosoContext = useMemo(
     () => ({
-      onScrollPositionChange: handleChatScroll
+      onScrollPositionChange: handleChatScroll,
+      onUserScrollIntent: markUserScrollIntent
     }),
-    [handleChatScroll]
+    [handleChatScroll, markUserScrollIntent]
   );
 
   function jumpToCurrent() {
@@ -1084,7 +1130,17 @@ export function App() {
                   <em>{activeStreamMeta}</em>
                 </div>
                 <div className="stream-source-controls">
-                  <button className="icon-button" type="button" title="Previous stream source" onClick={() => cycleStreamSource(-1)}>
+                  <label className="stream-source-select-wrap">
+                    {activeStreamSource ? <StreamSourceMark source={activeStreamSource} /> : null}
+                    <select value={activeStreamSource?.id ?? ""} onChange={(event) => setActiveStreamSourceId(event.target.value)} aria-label="Stream source">
+                      {streamSources.map((source) => (
+                        <option value={source.id} key={source.id}>
+                          {source.label} - {streamSourceMeta(source)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="icon-button stream-source-nav-button" type="button" title="Previous stream source" onClick={() => cycleStreamSource(-1)}>
                     <ChevronLeft size={16} aria-hidden="true" />
                   </button>
                   <div className="stream-source-tabs" role="tablist" aria-label="Stream sources">
@@ -1103,7 +1159,7 @@ export function App() {
                       </button>
                     ))}
                   </div>
-                  <button className="icon-button" type="button" title="Next stream source" onClick={() => cycleStreamSource(1)}>
+                  <button className="icon-button stream-source-nav-button" type="button" title="Next stream source" onClick={() => cycleStreamSource(1)}>
                     <ChevronRight size={16} aria-hidden="true" />
                   </button>
                   <button className="icon-button" type="button" title="Reload stream player" onClick={reloadStreamFrame}>
@@ -1162,7 +1218,7 @@ export function App() {
                     setAtBottom(false);
                   }
                 }}
-                followOutput={lockedMessages || paused || readingLocked || !atBottom ? false : "auto"}
+                followOutput={lockedMessages || paused || readingLocked ? false : "auto"}
                 itemContent={(_, message) => <MessageRow message={message} />}
               />
               {lockedMessages && displayedMessages.length > 0 ? (
@@ -1254,7 +1310,7 @@ export function App() {
               title={paused ? "Resume feed" : "Pause feed"}
               aria-label={paused ? "Resume feed" : "Pause feed"}
               aria-pressed={paused}
-              onClick={() => setPaused((value) => !value)}
+              onClick={togglePaused}
             >
               {paused ? <Play size={17} aria-hidden="true" /> : <Pause size={17} aria-hidden="true" />}
             </button>
@@ -1673,7 +1729,7 @@ export function App() {
                       setAtBottom(false);
                     }
                   }}
-                  followOutput={lockedMessages || paused || readingLocked || !atBottom ? false : "auto"}
+                  followOutput={lockedMessages || paused || readingLocked ? false : "auto"}
                   itemContent={(_, message) => <MessageRow message={message} />}
                 />
               </div>

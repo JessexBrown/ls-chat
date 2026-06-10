@@ -2762,6 +2762,8 @@ async function attachClientApp() {
       middlewareMode: true,
       hmr: {
         server: httpServer,
+        host: "localhost",
+        port,
         clientPort: port,
         protocol: "ws"
       }
