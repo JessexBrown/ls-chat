@@ -136,12 +136,23 @@ h1 {
 .connection-pill,
 .source-chip,
 .platform-badge,
-.message-badge,
 .composer-bar,
 .search-box,
-.primary-button {
+.primary-button,
+.secondary-button,
+.secondary-link-button {
   display: flex;
   align-items: center;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .source-bar {
@@ -405,11 +416,21 @@ h1 {
 .icon-button {
   width: 34px;
   height: 34px;
+  flex: 0 0 auto;
+  line-height: 1;
 }
 
 .stream-open-button {
   flex: 0 0 auto;
   text-decoration: none;
+}
+
+.icon-button svg,
+.ghost-icon svg,
+.primary-button svg,
+.secondary-button svg,
+.secondary-link-button svg {
+  flex: 0 0 auto;
 }
 
 .ghost-icon {
@@ -928,13 +949,22 @@ h1 {
 
 .platform-badge {
   flex: 0 0 auto;
-  min-width: 24px;
+  width: 24px;
+  height: 22px;
   justify-content: center;
   border-radius: 4px;
-  padding: 1px 4px 2px;
-  font-size: 10px;
-  font-weight: 950;
-  line-height: 1.1;
+  padding: 3px;
+  line-height: 0;
+}
+
+.platform-badge svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.platform-logo-cut {
+  fill: #050505;
 }
 
 .platform-twitch {
@@ -976,27 +1006,57 @@ h1 {
 }
 
 .message-username {
+  display: inline-block;
   flex: 0 1 auto;
   max-width: 18ch;
   overflow: hidden;
+  outline: 0;
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.message-badge {
-  flex: 0 0 auto;
-  justify-content: center;
-  max-width: 28px;
-  overflow: hidden;
-  border-radius: 3px;
-  padding: 1px 4px 2px;
-  color: #10131a;
-  background: #f3c969;
-  font-size: 10px;
-  font-weight: 950;
-  line-height: 1.1;
-  text-transform: uppercase;
+.message-identity {
+  position: relative;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.message-hover-card {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 5px);
+  z-index: 20;
+  width: max-content;
+  max-width: min(320px, 70vw);
+  display: none;
+  gap: 3px;
+  border: 1px solid rgba(232, 255, 156, 0.24);
+  border-radius: 8px;
+  padding: 8px 9px;
+  color: #dce1ea;
+  background: rgba(10, 10, 10, 0.98);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.48);
+  font-size: 12px;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.message-hover-card strong {
+  color: #ffffff;
+}
+
+.message-hover-card span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.message-line:hover .message-hover-card,
+.message-identity:hover .message-hover-card,
+.message-identity:focus-within .message-hover-card,
+.message-hover-card-visible {
+  display: grid;
 }
 
 .message-separator {
@@ -1043,6 +1103,7 @@ h1 {
 .secondary-link-button {
   flex: 0 0 auto;
   height: 32px;
+  align-items: center;
   justify-content: center;
   gap: 6px;
   border: 1px solid rgba(83, 252, 24, 0.5);
@@ -1052,6 +1113,7 @@ h1 {
   background: #53fc18;
   font-size: 13px;
   font-weight: 900;
+  line-height: 1;
 }
 
 .secondary-button,
@@ -1367,6 +1429,7 @@ h1 {
 }
 
 .public-message-list {
+  position: relative;
   min-height: 0;
   font-size: 13px;
 }
@@ -1402,10 +1465,6 @@ h1 {
   font-size: 11px;
   font-weight: 900;
   white-space: nowrap;
-}
-
-.native-name-input {
-  flex: 0 0 132px;
 }
 
 .native-message-input {
@@ -1566,9 +1625,9 @@ h1 {
   }
 
   .source-chip .platform-badge {
-    min-width: 20px;
-    padding-right: 3px;
-    padding-left: 3px;
+    width: 22px;
+    height: 22px;
+    padding: 3px;
   }
 
   .source-chip .integration-dot {
@@ -1680,12 +1739,11 @@ h1 {
 
   .native-composer {
     display: grid;
-    grid-template-columns: minmax(72px, 0.24fr) minmax(76px, 0.28fr) minmax(0, 1fr) 70px;
+    grid-template-columns: minmax(78px, 0.26fr) minmax(0, 1fr) 70px;
     gap: 6px;
   }
 
-  .native-identity-chip,
-  .native-name-input {
+  .native-identity-chip {
     flex-basis: auto;
     width: 100%;
   }

@@ -34,7 +34,7 @@ Expected result:
 ## Native Chat Functional Test
 
 1. Open `/live` in two browser windows.
-2. In window A, enter a display name and send a short MarketBubble message.
+2. In window A, confirm the composer shows an assigned `Guest ******` identity and send a short MarketBubble message.
 3. Confirm the message appears in window A.
 4. Confirm the same message appears in window B without refreshing.
 5. Confirm the message row shows platform `MB` and the configured native chat label.
@@ -62,7 +62,7 @@ Use a 390px wide viewport:
 2. Confirm there is no horizontal page scrolling.
 3. Confirm the stream source controls wrap cleanly.
 4. Confirm the chat panel remains visible beneath the stream.
-5. Confirm the native chat composer keeps the name field, message field, and send button usable.
+5. Confirm the native chat composer keeps the assigned guest identity, message field, and send button usable.
 
 ## Production Gaps To Close
 

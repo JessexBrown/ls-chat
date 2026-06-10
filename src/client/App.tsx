@@ -19,7 +19,7 @@ import {
   WifiOff,
   X
 } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type Components, type ScrollerProps, type VirtuosoHandle } from "react-virtuoso";
 import type { ChatMessage, Platform, StreamSource, ViewerSnapshot } from "../shared/chat";
 import { useChatStream } from "./useChatStream";
@@ -29,13 +29,6 @@ const platformLabels: Record<Platform, string> = {
   kick: "Kick",
   x: "X",
   marketbubble: "MarketBubble"
-};
-
-const platformShortLabels: Record<Platform, string> = {
-  twitch: "TW",
-  kick: "KI",
-  x: "X",
-  marketbubble: "MB"
 };
 
 const platformColors: Record<Platform, string> = {
@@ -63,14 +56,6 @@ function initialVisualPreset(): VisualPreset {
 
   const stored = window.localStorage.getItem("ls-chat-visual-preset");
   return visualPresets.some((preset) => preset.id === stored) ? (stored as VisualPreset) : "marketbubble";
-}
-
-function initialNativeUsername() {
-  if (typeof window === "undefined") {
-    return "viewer";
-  }
-
-  return window.localStorage.getItem("ls-chat-native-username") ?? "viewer";
 }
 
 function initialNativeClientId() {
@@ -117,6 +102,26 @@ const virtuosoComponents: Components<ChatMessage, ChatVirtuosoContext> = {
     );
   })
 };
+
+const StreamEmbedFrame = memo(function StreamEmbedFrame({
+  src,
+  title,
+  refreshKey
+}: {
+  src: string;
+  title: string;
+  refreshKey: number;
+}) {
+  return (
+    <iframe
+      key={`${src}:${refreshKey}`}
+      src={src}
+      title={title}
+      allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+      allowFullScreen
+    />
+  );
+});
 
 type IntegrationState = "disabled" | "connecting" | "connected" | "subscribed" | "error";
 
@@ -246,8 +251,49 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
+function PlatformLogo({ platform }: { platform: Platform }) {
+  if (platform === "twitch") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 3h16v10.7l-4.4 4.4h-3.5l-3.1 3.1H7v-3.1H3V7l2-4Z" />
+        <path className="platform-logo-cut" d="M8 6h10v6.2l-2 2h-3.4l-2.5 2.5v-2.5H8V6Z" />
+        <path d="M11 8h1.8v4H11V8Zm4.2 0H17v4h-1.8V8Z" />
+      </svg>
+    );
+  }
+
+  if (platform === "kick") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 4h16v16H4V4Z" />
+        <path className="platform-logo-cut" d="M8 7h4v3h2V7h4v4h-2v2h2v4h-4v-3h-2v3H8V7Z" />
+      </svg>
+    );
+  }
+
+  if (platform === "x") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4.7 4h4.5l3.4 4.8L16.7 4h2.5l-5.5 6.4L20 20h-4.5l-3.8-5.5L7 20H4.5l6.1-7.1L4.7 4Zm2.9 1.8 8.9 12.4h1L8.6 5.8h-1Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3.5c4.7 0 8.5 3 8.5 6.8 0 2.6-1.8 4.9-4.5 6.1l.4 3.4-3.7-2.7H12c-4.7 0-8.5-3-8.5-6.8S7.3 3.5 12 3.5Z" />
+      <path className="platform-logo-cut" d="M8 9h8v2H8V9Zm2 3h5v2h-5v-2Z" />
+    </svg>
+  );
+}
+
 function PlatformBadge({ platform }: { platform: Platform }) {
-  return <span className={`platform-badge platform-${platform}`}>{platformShortLabels[platform]}</span>;
+  return (
+    <span className={`platform-badge platform-${platform}`} title={platformLabels[platform]}>
+      <PlatformLogo platform={platform} />
+      <span className="sr-only">{platformLabels[platform]}</span>
+    </span>
+  );
 }
 
 function ConnectionPill({ state }: { state: "connecting" | "connected" | "disconnected" }) {
@@ -334,13 +380,15 @@ function isDevelopmentStreamSource(source: StreamSource) {
 }
 
 function MessageRow({ message }: { message: ChatMessage }) {
+  const [metadataOpen, setMetadataOpen] = useState(false);
   const displayName = message.displayName ?? message.username;
   const originLabel = sourceTitle(message);
   const sourceLabel = message.sourceLabel ?? message.channelName ?? platformLabels[message.platform];
   const badgeTitle = message.badges.map((badge) => badge.label).filter(Boolean).join(", ");
+  const platformUserId = message.platformUserId ?? "unknown";
   const usernameTitle = [
     displayName,
-    message.platformUserId ? `ID: ${message.platformUserId}` : null,
+    message.platformUserId ? `ID: ${platformUserId}` : null,
     badgeTitle ? `Badges: ${badgeTitle}` : null
   ]
     .filter(Boolean)
@@ -348,14 +396,30 @@ function MessageRow({ message }: { message: ChatMessage }) {
 
   return (
     <article className={`message-row message-row-${message.platform}`}>
-      <div className="message-line">
+      <div className="message-line" onMouseEnter={() => setMetadataOpen(true)} onMouseLeave={() => setMetadataOpen(false)}>
         <PlatformBadge platform={message.platform} />
         <time className="message-time">{formatTime(message.sentAt ?? message.receivedAt)}</time>
         <span className="message-channel" title={originLabel}>
           {sourceLabel}
         </span>
-        <span className="message-username" title={usernameTitle} style={{ color: message.color ?? platformColors[message.platform] }}>
-          {displayName}
+        <span className="message-identity">
+          <span
+            className="message-username"
+            title={usernameTitle}
+            tabIndex={0}
+            onClick={() => setMetadataOpen((open) => !open)}
+            onFocus={() => setMetadataOpen(true)}
+            onBlur={() => setMetadataOpen(false)}
+            style={{ color: message.color ?? platformColors[message.platform] }}
+          >
+            {displayName}
+          </span>
+          <span className={`message-hover-card ${metadataOpen ? "message-hover-card-visible" : ""}`} role="tooltip">
+            <strong>{displayName}</strong>
+            <span>{platformLabels[message.platform]} / {sourceLabel}</span>
+            <span>ID: {platformUserId}</span>
+            {badgeTitle ? <span>Badges: {badgeTitle}</span> : null}
+          </span>
         </span>
         <span className="message-separator">:</span>
         <span className="message-text">{message.message}</span>
@@ -445,7 +509,6 @@ export function App() {
   const [activeStreamSourceId, setActiveStreamSourceId] = useState(() => window.localStorage.getItem("ls-chat-active-stream-source") ?? "");
   const [streamFrameRefreshKey, setStreamFrameRefreshKey] = useState(0);
   const [nativeClientId] = useState(() => initialNativeClientId());
-  const [nativeUsername, setNativeUsername] = useState(() => initialNativeUsername());
   const [nativeMessage, setNativeMessage] = useState("");
   const [nativeStatus, setNativeStatus] = useState("");
   const [visualPreset, setVisualPreset] = useState<VisualPreset>(() => initialVisualPreset());
@@ -454,10 +517,6 @@ export function App() {
     document.documentElement.dataset.theme = visualPreset;
     window.localStorage.setItem("ls-chat-visual-preset", visualPreset);
   }, [visualPreset]);
-
-  useEffect(() => {
-    window.localStorage.setItem("ls-chat-native-username", nativeUsername.trim() || "viewer");
-  }, [nativeUsername]);
 
   const loadHealth = useCallback(async () => {
     const response = await fetch("/api/health");
@@ -549,6 +608,8 @@ export function App() {
     });
   }, [enabledPlatforms, messages, query]);
 
+  const visibleMessages = isPublicDashboard ? messages : filteredMessages;
+
   const streamSources = useMemo<StreamSource[]>(() => {
     const configuredSources = (publicConfig?.streamSources ?? []).filter((source) => !isDevelopmentStreamSource(source));
     if (configuredSources.length > 0) {
@@ -597,14 +658,14 @@ export function App() {
 
   useEffect(() => {
     const previousCount = previousVisibleMessageCount.current;
-    if ((readingLocked || !atBottom) && filteredMessages.length > previousCount) {
-      setNewMessagesAway((current) => current + filteredMessages.length - previousCount);
+    if ((readingLocked || !atBottom) && visibleMessages.length > previousCount) {
+      setNewMessagesAway((current) => current + visibleMessages.length - previousCount);
     }
     if (atBottom && !readingLocked) {
       setNewMessagesAway(0);
     }
-    previousVisibleMessageCount.current = filteredMessages.length;
-  }, [atBottom, filteredMessages.length, readingLocked]);
+    previousVisibleMessageCount.current = visibleMessages.length;
+  }, [atBottom, readingLocked, visibleMessages.length]);
 
   const setReaderLock = useCallback((locked: boolean) => {
     readingLockedRef.current = locked;
@@ -633,13 +694,13 @@ export function App() {
   );
 
   function jumpToCurrent() {
-    if (filteredMessages.length === 0) {
+    if (visibleMessages.length === 0) {
       return;
     }
 
     setReaderLock(false);
     virtuosoRef.current?.scrollToIndex({
-      index: filteredMessages.length - 1,
+      index: visibleMessages.length - 1,
       align: "end",
       behavior: "smooth"
     });
@@ -666,7 +727,7 @@ export function App() {
 
   async function sendNativeMessage() {
     const text = nativeMessage.trim();
-    const username = nativeUsername.trim() || "viewer";
+    const username = shortNativeClientId(nativeClientId);
     if (!text) {
       return;
     }
@@ -1019,13 +1080,7 @@ export function App() {
             ) : null}
             <div className="stream-frame">
               {streamEmbedUrl ? (
-                <iframe
-                  key={`${activeStreamSource?.id ?? "stream"}:${streamFrameRefreshKey}`}
-                  src={streamEmbedUrl}
-                  title={dashboardTitle}
-                  allow="autoplay; fullscreen; picture-in-picture"
-                  allowFullScreen
-                />
+                <StreamEmbedFrame src={streamEmbedUrl} title={dashboardTitle} refreshKey={streamFrameRefreshKey} />
               ) : (
                 <div className="stream-placeholder">
                   <Radio size={30} aria-hidden="true" />
@@ -1052,7 +1107,30 @@ export function App() {
               <span>{messages.length} messages</span>
             </div>
             <div className="public-message-list">
-              <Virtuoso data={messages} followOutput="smooth" itemContent={(_, message) => <MessageRow message={message} />} />
+              <Virtuoso
+                ref={virtuosoRef}
+                data={messages}
+                components={virtuosoComponents}
+                context={chatVirtuosoContext}
+                atBottomThreshold={72}
+                atBottomStateChange={(bottom) => {
+                  if (bottom) {
+                    setAtBottom(true);
+                    setReaderLock(false);
+                    setNewMessagesAway(0);
+                  } else if (readingLockedRef.current || paused) {
+                    setAtBottom(false);
+                  }
+                }}
+                followOutput={paused || readingLocked || !atBottom ? false : "auto"}
+                itemContent={(_, message) => <MessageRow message={message} />}
+              />
+              {(readingLocked || !atBottom) && messages.length > 0 ? (
+                <button className="jump-current-button public-jump-current-button" type="button" onClick={jumpToCurrent}>
+                  <ArrowDown size={15} aria-hidden="true" />
+                  {newMessagesAway > 0 ? `${newMessagesAway} new` : "Jump to current"}
+                </button>
+              ) : null}
             </div>
             <form
               className="native-composer"
@@ -1064,14 +1142,6 @@ export function App() {
               <span className="native-identity-chip" title={`Local MarketBubble chat ID: ${nativeClientId}`}>
                 {shortNativeClientId(nativeClientId)}
               </span>
-              <input
-                className="native-name-input"
-                value={nativeUsername}
-                onChange={(event) => setNativeUsername(event.target.value)}
-                aria-label="Native chat username"
-                placeholder="Name"
-                maxLength={32}
-              />
               <input
                 className="native-message-input"
                 value={nativeMessage}
@@ -1554,15 +1624,17 @@ export function App() {
                   data={filteredMessages}
                   components={virtuosoComponents}
                   context={chatVirtuosoContext}
-                  atBottomThreshold={1}
+                  atBottomThreshold={72}
                   atBottomStateChange={(bottom) => {
-                    setAtBottom(bottom);
                     if (bottom) {
+                      setAtBottom(true);
                       setReaderLock(false);
                       setNewMessagesAway(0);
+                    } else if (readingLockedRef.current || paused) {
+                      setAtBottom(false);
                     }
                   }}
-                  followOutput={paused || readingLocked || !atBottom ? false : "smooth"}
+                  followOutput={paused || readingLocked || !atBottom ? false : "auto"}
                   itemContent={(_, message) => <MessageRow message={message} />}
                 />
               </div>

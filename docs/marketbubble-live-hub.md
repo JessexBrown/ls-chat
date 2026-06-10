@@ -54,7 +54,7 @@ MarketBubble native chat is a first-party source with platform `marketbubble`. M
 
 The strategic purpose of native chat is not only message capture. It should become the shared room that Twitch, Kick, and X viewers recognize as the canonical conversation around the MarketBubble show. Production versions should move toward account-backed identity, moderation tools, badges, pinned context, and visible cross-platform source labeling so the website has social value that the individual platforms cannot provide alone.
 
-Until account login is added, the public client creates a stable local guest ID and sends it with native chat messages. That ID is not strong authentication, but it gives moderation and debugging a consistent browser-level identifier instead of relying only on editable display names.
+Until account login is added, the public client creates a stable local guest ID and sends native chat as that guest identity. Viewers no longer choose arbitrary display names in the unauthenticated composer. That ID is not strong authentication, but it gives moderation and debugging a consistent browser-level identifier instead of relying only on editable names.
 
 ## Current Implementation Slice
 
