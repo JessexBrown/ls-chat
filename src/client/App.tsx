@@ -35,7 +35,7 @@ const platformColors: Record<Platform, string> = {
   twitch: "#a970ff",
   kick: "#53fc18",
   x: "#e7eaee",
-  marketbubble: "#32d9c3"
+  marketbubble: "#e8ff9c"
 };
 
 const platformOrder: Platform[] = ["twitch", "kick", "x", "marketbubble"];
@@ -255,9 +255,8 @@ function PlatformLogo({ platform }: { platform: Platform }) {
   if (platform === "twitch") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 3h16v10.7l-4.4 4.4h-3.5l-3.1 3.1H7v-3.1H3V7l2-4Z" />
-        <path className="platform-logo-cut" d="M8 6h10v6.2l-2 2h-3.4l-2.5 2.5v-2.5H8V6Z" />
-        <path d="M11 8h1.8v4H11V8Zm4.2 0H17v4h-1.8V8Z" />
+        <path d="M4 3h16v11.2l-4 4h-3.2L10 21H7v-2.8H4V3Zm3 3v9.2h3v2.4l2.4-2.4H15l2-2V6H7Z" />
+        <path d="M10 8h2v4h-2V8Zm5 0h2v4h-2V8Z" />
       </svg>
     );
   }
@@ -265,8 +264,7 @@ function PlatformLogo({ platform }: { platform: Platform }) {
   if (platform === "kick") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 4h16v16H4V4Z" />
-        <path className="platform-logo-cut" d="M8 7h4v3h2V7h4v4h-2v2h2v4h-4v-3h-2v3H8V7Z" />
+        <path d="M5 4h6v5h2.2L16.7 4H22l-5.2 7.2L22 20h-5.6l-3.3-5.6H11V20H5V4Z" />
       </svg>
     );
   }
@@ -281,8 +279,8 @@ function PlatformLogo({ platform }: { platform: Platform }) {
 
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 3.5c4.7 0 8.5 3 8.5 6.8 0 2.6-1.8 4.9-4.5 6.1l.4 3.4-3.7-2.7H12c-4.7 0-8.5-3-8.5-6.8S7.3 3.5 12 3.5Z" />
-      <path className="platform-logo-cut" d="M8 9h8v2H8V9Zm2 3h5v2h-5v-2Z" />
+      <path d="M4 5.5h16v10.2l-3.2 3.2h-4.1l-2.4 2.4-2.4-2.4H4V5.5Z" />
+      <path className="platform-logo-cut" d="M7.2 13.3h2.2l1.5-2 2.1 2.7 3.5-5h1.9l-5.3 7.4-2.1-2.7-1 1.3H7.2v-1.7Z" />
     </svg>
   );
 }
@@ -472,6 +470,7 @@ export function App() {
   const { messages, connectionState, counts, sourceSnapshot } = useChatStream(isPublicDashboard ? "viewer" : "admin");
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const previousVisibleMessageCount = useRef(0);
+  const previousLiveMessageIds = useRef<string[]>([]);
   const lastScrollTop = useRef(0);
   const readingLockedRef = useRef(false);
   const twitchBroadcasterEdited = useRef(false);
@@ -490,6 +489,7 @@ export function App() {
   const [paused, setPaused] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [readingLocked, setReadingLocked] = useState(false);
+  const [lockedMessages, setLockedMessages] = useState<ChatMessage[] | null>(null);
   const [newMessagesAway, setNewMessagesAway] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeSettingsPlatform, setActiveSettingsPlatform] = useState<Exclude<Platform, "marketbubble">>("twitch");
@@ -608,7 +608,8 @@ export function App() {
     });
   }, [enabledPlatforms, messages, query]);
 
-  const visibleMessages = isPublicDashboard ? messages : filteredMessages;
+  const liveVisibleMessages = isPublicDashboard ? messages : filteredMessages;
+  const displayedMessages = lockedMessages ?? liveVisibleMessages;
 
   const streamSources = useMemo<StreamSource[]>(() => {
     const configuredSources = (publicConfig?.streamSources ?? []).filter((source) => !isDevelopmentStreamSource(source));
@@ -657,20 +658,54 @@ export function App() {
   }, [activeStreamSourceId]);
 
   useEffect(() => {
-    const previousCount = previousVisibleMessageCount.current;
-    if ((readingLocked || !atBottom) && visibleMessages.length > previousCount) {
-      setNewMessagesAway((current) => current + visibleMessages.length - previousCount);
+    const previousIds = new Set(previousLiveMessageIds.current);
+    const addedCount = liveVisibleMessages.reduce((count, message) => count + (previousIds.has(message.id) ? 0 : 1), 0);
+
+    if (lockedMessages && addedCount > 0) {
+      setNewMessagesAway((current) => current + addedCount);
     }
-    if (atBottom && !readingLocked) {
+
+    if (!lockedMessages && atBottom && !readingLocked && !paused) {
       setNewMessagesAway(0);
     }
-    previousVisibleMessageCount.current = visibleMessages.length;
-  }, [atBottom, readingLocked, visibleMessages.length]);
 
-  const setReaderLock = useCallback((locked: boolean) => {
-    readingLockedRef.current = locked;
-    setReadingLocked(locked);
-  }, []);
+    previousLiveMessageIds.current = liveVisibleMessages.map((message) => message.id);
+    previousVisibleMessageCount.current = liveVisibleMessages.length;
+  }, [atBottom, liveVisibleMessages, lockedMessages, paused, readingLocked]);
+
+  const lockChat = useCallback(
+    (reason: "pause" | "scroll") => {
+      readingLockedRef.current = reason === "scroll";
+      setReadingLocked(reason === "scroll");
+      setLockedMessages((current) => current ?? liveVisibleMessages);
+      setAtBottom(false);
+    },
+    [liveVisibleMessages]
+  );
+
+  const releaseChatLock = useCallback(
+    (behavior: "auto" | "smooth" = "auto", clearPaused = true) => {
+      readingLockedRef.current = false;
+      setReadingLocked(false);
+      if (clearPaused) {
+        setPaused(false);
+      }
+      setLockedMessages(null);
+      setAtBottom(true);
+      setNewMessagesAway(0);
+
+      window.requestAnimationFrame(() => {
+        if (liveVisibleMessages.length > 0) {
+          virtuosoRef.current?.scrollToIndex({
+            index: liveVisibleMessages.length - 1,
+            align: "end",
+            behavior
+          });
+        }
+      });
+    },
+    [liveVisibleMessages.length]
+  );
 
   const handleChatScroll = useCallback(
     (scrollTop: number) => {
@@ -678,12 +713,11 @@ export function App() {
       const delta = scrollTop - previousScrollTop;
       lastScrollTop.current = scrollTop;
 
-      if (delta < -1 && !readingLockedRef.current) {
-        setReaderLock(true);
-        setAtBottom(false);
+      if (delta < -1 && !lockedMessages) {
+        lockChat("scroll");
       }
     },
-    [setReaderLock]
+    [lockChat, lockedMessages]
   );
 
   const chatVirtuosoContext = useMemo(
@@ -694,18 +728,23 @@ export function App() {
   );
 
   function jumpToCurrent() {
-    if (visibleMessages.length === 0) {
+    if (liveVisibleMessages.length === 0) {
       return;
     }
 
-    setReaderLock(false);
-    virtuosoRef.current?.scrollToIndex({
-      index: visibleMessages.length - 1,
-      align: "end",
-      behavior: "smooth"
-    });
-    setAtBottom(true);
-    setNewMessagesAway(0);
+    releaseChatLock("smooth");
+  }
+
+  function togglePaused() {
+    const nextPaused = !paused;
+
+    if (nextPaused) {
+      lockChat("pause");
+    } else {
+      releaseChatLock("auto", false);
+    }
+
+    setPaused(nextPaused);
   }
 
   async function sendMockMessage() {
@@ -1109,23 +1148,24 @@ export function App() {
             <div className="public-message-list">
               <Virtuoso
                 ref={virtuosoRef}
-                data={messages}
+                data={displayedMessages}
                 components={virtuosoComponents}
                 context={chatVirtuosoContext}
                 atBottomThreshold={72}
                 atBottomStateChange={(bottom) => {
-                  if (bottom) {
+                  if (bottom && !lockedMessages && !paused) {
                     setAtBottom(true);
-                    setReaderLock(false);
+                    readingLockedRef.current = false;
+                    setReadingLocked(false);
                     setNewMessagesAway(0);
-                  } else if (readingLockedRef.current || paused) {
+                  } else if (lockedMessages || readingLockedRef.current || paused) {
                     setAtBottom(false);
                   }
                 }}
-                followOutput={paused || readingLocked || !atBottom ? false : "auto"}
+                followOutput={lockedMessages || paused || readingLocked || !atBottom ? false : "auto"}
                 itemContent={(_, message) => <MessageRow message={message} />}
               />
-              {(readingLocked || !atBottom) && messages.length > 0 ? (
+              {lockedMessages && displayedMessages.length > 0 ? (
                 <button className="jump-current-button public-jump-current-button" type="button" onClick={jumpToCurrent}>
                   <ArrowDown size={15} aria-hidden="true" />
                   {newMessagesAway > 0 ? `${newMessagesAway} new` : "Jump to current"}
@@ -1241,31 +1281,6 @@ export function App() {
                   <span>MarketBubble site and platform connections</span>
                 </div>
               </div>
-
-              <div className="settings-platform-switcher">
-                <button className="icon-button settings-nav-button" type="button" title="Previous platform" onClick={() => cycleSettingsPlatform(-1)}>
-                  <ChevronLeft size={16} aria-hidden="true" />
-                </button>
-                <div className="settings-tabs" role="tablist" aria-label="Settings platforms">
-                  {settingsPlatformOrder.map((platform) => (
-                    <button
-                      className={`settings-tab ${activeSettingsPlatform === platform ? "settings-tab-active" : ""}`}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeSettingsPlatform === platform}
-                      key={platform}
-                      onClick={() => setActiveSettingsPlatform(platform)}
-                    >
-                      <PlatformBadge platform={platform} />
-                      <span>{platformLabels[platform]}</span>
-                      <IntegrationDot state={health?.integrations.statuses[platform]?.state} />
-                    </button>
-                  ))}
-                </div>
-                <button className="icon-button settings-nav-button" type="button" title="Next platform" onClick={() => cycleSettingsPlatform(1)}>
-                  <ChevronRight size={16} aria-hidden="true" />
-                </button>
-              </div>
             </div>
 
             <div className={`settings-platform-panel settings-platform-${activeSettingsPlatform}`}>
@@ -1362,12 +1377,35 @@ export function App() {
                 </div>
               </div>
 
-              <div className="settings-category-heading">
+              <div className="settings-category-heading settings-platform-category-heading">
                 <div>
                   <Settings size={15} aria-hidden="true" />
                   <strong>Platform Connections</strong>
                 </div>
-                <span>Track external broadcasters and manage ingestion per source</span>
+                <div className="settings-platform-switcher">
+                  <button className="icon-button settings-nav-button" type="button" title="Previous platform" onClick={() => cycleSettingsPlatform(-1)}>
+                    <ChevronLeft size={16} aria-hidden="true" />
+                  </button>
+                  <div className="settings-tabs" role="tablist" aria-label="Settings platforms">
+                    {settingsPlatformOrder.map((platform) => (
+                      <button
+                        className={`settings-tab ${activeSettingsPlatform === platform ? "settings-tab-active" : ""}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={activeSettingsPlatform === platform}
+                        key={platform}
+                        onClick={() => setActiveSettingsPlatform(platform)}
+                      >
+                        <PlatformBadge platform={platform} />
+                        <span>{platformLabels[platform]}</span>
+                        <IntegrationDot state={health?.integrations.statuses[platform]?.state} />
+                      </button>
+                    ))}
+                  </div>
+                  <button className="icon-button settings-nav-button" type="button" title="Next platform" onClick={() => cycleSettingsPlatform(1)}>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
 
               {activeSettingsPlatform === "twitch" ? (
@@ -1621,24 +1659,25 @@ export function App() {
               <div className="message-list">
                 <Virtuoso
                   ref={virtuosoRef}
-                  data={filteredMessages}
+                  data={displayedMessages}
                   components={virtuosoComponents}
                   context={chatVirtuosoContext}
                   atBottomThreshold={72}
                   atBottomStateChange={(bottom) => {
-                    if (bottom) {
+                    if (bottom && !lockedMessages && !paused) {
                       setAtBottom(true);
-                      setReaderLock(false);
+                      readingLockedRef.current = false;
+                      setReadingLocked(false);
                       setNewMessagesAway(0);
-                    } else if (readingLockedRef.current || paused) {
+                    } else if (lockedMessages || readingLockedRef.current || paused) {
                       setAtBottom(false);
                     }
                   }}
-                  followOutput={paused || readingLocked || !atBottom ? false : "auto"}
+                  followOutput={lockedMessages || paused || readingLocked || !atBottom ? false : "auto"}
                   itemContent={(_, message) => <MessageRow message={message} />}
                 />
               </div>
-              {(readingLocked || !atBottom) && filteredMessages.length > 0 ? (
+              {lockedMessages && displayedMessages.length > 0 ? (
                 <button className="jump-current-button" type="button" onClick={jumpToCurrent}>
                   <ArrowDown size={15} aria-hidden="true" />
                   {newMessagesAway > 0 ? `${newMessagesAway} new` : "Jump to current"}

@@ -2761,7 +2761,9 @@ async function attachClientApp() {
     server: {
       middlewareMode: true,
       hmr: {
-        server: httpServer
+        server: httpServer,
+        clientPort: port,
+        protocol: "ws"
       }
     },
     appType: "spa"
