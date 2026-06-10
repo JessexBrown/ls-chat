@@ -114,6 +114,8 @@ Returns the operator-editable Live Session configuration plus the current source
 
 Updates the saved Live Session configuration. Values are stored in `LIVE_SESSION_FILE`, defaulting to `.data/live-session.json`.
 
+Supported stream URLs are normalized before being served to `/live`. For example, `https://www.twitch.tv/jynxzi` becomes a Twitch player URL with the required `parent` parameter for the current host. Twitch requires embedded player URLs to include the embedding domain as `parent`.
+
 ```json
 {
   "title": "MarketBubble Live",

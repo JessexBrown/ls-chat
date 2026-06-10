@@ -18,6 +18,7 @@ import { LiveSessionStore, liveSessionUpdateSchema } from "./liveSession";
 import { SourceHub } from "./sourceHub";
 import { verifyKickSignature, verifyTwitchSignature, type RawBodyRequest } from "./security";
 import { subscribeKickChatWebhook } from "./workers/kickSubscriptions";
+import { buildStreamEmbedUrl } from "./streamEmbeds";
 import { IntegrationStatusStore } from "./workers/status";
 import { TwitchEventSubWorker } from "./workers/twitchEventSub";
 import { parseXRules, XFilteredStreamWorker } from "./workers/xFilteredStream";
@@ -1439,9 +1440,15 @@ function publicDashboardConfig(req?: Request) {
   const host = req?.get("host") ?? `localhost:${port}`;
   const protocol = req?.protocol ?? "http";
   const session = liveSessionStore.get();
+  const streamEmbedUrl = buildStreamEmbedUrl({
+    streamEmbedUrl: session.streamEmbedUrl,
+    streamWatchUrl: session.streamWatchUrl,
+    parentHost: host
+  });
 
   return {
     ...session,
+    streamEmbedUrl,
     publicUrl: `${protocol}://${host}/live`
   };
 }
@@ -1654,6 +1661,7 @@ app.get("/api/health", (req, res) => {
     demoEnabled,
     messageCount: hub.size,
     messageHistoryLimit,
+    liveSession: liveSessionStore.get(),
     sources: sourceHub.snapshot(),
     publicDashboard: publicDashboardConfig(req),
     integrations: {
@@ -1683,6 +1691,7 @@ app.get("/api/public/config", (req, res) => {
 
 app.get("/api/live-session", (req, res) => {
   res.json({
+    liveSession: liveSessionStore.get(),
     dashboard: publicDashboardConfig(req),
     sources: sourceHub.snapshot()
   });
@@ -1698,8 +1707,14 @@ app.put("/api/live-session", (req, res) => {
   const session = liveSessionStore.update(parsed.data);
   updateMarketBubbleViewerSource();
   res.json({
+    liveSession: session,
     dashboard: {
       ...session,
+      streamEmbedUrl: buildStreamEmbedUrl({
+        streamEmbedUrl: session.streamEmbedUrl,
+        streamWatchUrl: session.streamWatchUrl,
+        parentHost: req.get("host") ?? `localhost:${port}`
+      }),
       publicUrl: `${req.protocol}://${req.get("host")}/live`
     },
     sources: sourceHub.snapshot()

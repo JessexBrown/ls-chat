@@ -7,6 +7,7 @@ import {
   LogIn,
   LogOut,
   MessageCircle,
+  Palette,
   Pause,
   Play,
   Radio,
@@ -47,6 +48,23 @@ const platformColors: Record<Platform, string> = {
 const platformOrder: Platform[] = ["twitch", "kick", "x", "marketbubble"];
 const settingsPlatformOrder: Array<Exclude<Platform, "marketbubble">> = ["twitch", "kick", "x"];
 
+type VisualPreset = "marketbubble" | "tradefloor" | "studio";
+
+const visualPresets: Array<{ id: VisualPreset; label: string }> = [
+  { id: "marketbubble", label: "MarketBubble" },
+  { id: "tradefloor", label: "Trading Floor" },
+  { id: "studio", label: "Studio" }
+];
+
+function initialVisualPreset(): VisualPreset {
+  if (typeof window === "undefined") {
+    return "marketbubble";
+  }
+
+  const stored = window.localStorage.getItem("ls-chat-visual-preset");
+  return visualPresets.some((preset) => preset.id === stored) ? (stored as VisualPreset) : "marketbubble";
+}
+
 type ChatVirtuosoContext = {
   onScrollPositionChange: (scrollTop: number) => void;
 };
@@ -79,6 +97,7 @@ type IntegrationStatus = {
 type HealthResponse = {
   demoEnabled: boolean;
   messageCount: number;
+  liveSession: LiveSessionConfig;
   sources: ViewerSnapshot;
   publicDashboard: PublicDashboardConfig;
   integrations: {
@@ -163,6 +182,16 @@ type HealthResponse = {
       rules?: Array<{ value: string; tag?: string }>;
     };
   };
+};
+
+type LiveSessionConfig = {
+  id: string;
+  title: string;
+  nativeChatLabel: string;
+  streamEmbedUrl: string | null;
+  streamWatchUrl: string | null;
+  description: string;
+  updatedAt: string;
 };
 
 type PublicDashboardConfig = {
@@ -358,6 +387,12 @@ export function App() {
   const [publicConfig, setPublicConfig] = useState<PublicDashboardConfig | null>(null);
   const [nativeUsername, setNativeUsername] = useState("viewer");
   const [nativeMessage, setNativeMessage] = useState("");
+  const [visualPreset, setVisualPreset] = useState<VisualPreset>(() => initialVisualPreset());
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = visualPreset;
+    window.localStorage.setItem("ls-chat-visual-preset", visualPreset);
+  }, [visualPreset]);
 
   const loadHealth = useCallback(async () => {
     const response = await fetch("/api/health");
@@ -388,11 +423,11 @@ export function App() {
       }
     }
     if (!liveSessionEdited.current) {
-      setSessionTitle(nextHealth.publicDashboard.title);
-      setSessionNativeChatLabel(nextHealth.publicDashboard.nativeChatLabel);
-      setSessionStreamEmbedUrl(nextHealth.publicDashboard.streamEmbedUrl ?? "");
-      setSessionStreamWatchUrl(nextHealth.publicDashboard.streamWatchUrl ?? "");
-      setSessionDescription(nextHealth.publicDashboard.description ?? "");
+      setSessionTitle(nextHealth.liveSession.title);
+      setSessionNativeChatLabel(nextHealth.liveSession.nativeChatLabel);
+      setSessionStreamEmbedUrl(nextHealth.liveSession.streamEmbedUrl ?? "");
+      setSessionStreamWatchUrl(nextHealth.liveSession.streamWatchUrl ?? "");
+      setSessionDescription(nextHealth.liveSession.description ?? "");
     }
   }, [broadcasterLogin, kickBroadcaster, xRules, xTargetAccount]);
 
@@ -538,6 +573,13 @@ export function App() {
       ...current,
       [platform]: !current[platform]
     }));
+  }
+
+  function cycleVisualPreset() {
+    setVisualPreset((current) => {
+      const currentIndex = visualPresets.findIndex((preset) => preset.id === current);
+      return visualPresets[(currentIndex + 1) % visualPresets.length].id;
+    });
   }
 
   function updateTwitchBroadcasterLogin(value: string) {
@@ -778,6 +820,9 @@ export function App() {
             </div>
           </div>
           <div className="public-header-actions">
+            <button className="icon-button style-preset-button" type="button" title={`Style: ${visualPresets.find((preset) => preset.id === visualPreset)?.label}`} onClick={cycleVisualPreset}>
+              <Palette size={16} aria-hidden="true" />
+            </button>
             <ViewerSummary snapshot={sourceSnapshot} />
             <ConnectionPill state={connectionState} />
           </div>
@@ -841,7 +886,7 @@ export function App() {
           <div className="chat-title">
             <div className="chat-title-row">
               <Radio size={16} aria-hidden="true" />
-              <h1>Unified Chat</h1>
+              <h1>MarketBubble Live Desk</h1>
             </div>
             <span>
               {filteredMessages.length} shown | {counts.total} total
@@ -877,6 +922,9 @@ export function App() {
             </label>
             <ViewerSummary snapshot={sourceSnapshot} />
             <ConnectionPill state={connectionState} />
+            <button className="icon-button style-preset-button" type="button" title={`Style: ${visualPresets.find((preset) => preset.id === visualPreset)?.label}`} onClick={cycleVisualPreset}>
+              <Palette size={16} aria-hidden="true" />
+            </button>
             <button
               className={`icon-button ${paused ? "icon-button-active" : ""}`}
               type="button"
@@ -980,14 +1028,14 @@ export function App() {
                 </div>
                 <div className="settings-control-row settings-control-row-full">
                   <label>
-                    <span>Stream Embed URL</span>
+                    <span>Stream / Embed URL</span>
                     <input
                       value={sessionStreamEmbedUrl}
                       onChange={(event) => {
                         markLiveSessionEdited();
                         setSessionStreamEmbedUrl(event.target.value);
                       }}
-                      placeholder="https://player.example/embed"
+                      placeholder="https://www.twitch.tv/jynxzi"
                     />
                   </label>
                 </div>

@@ -61,8 +61,13 @@ The current implementation adds:
 - MarketBubble platform support
 - Twitch/Kick viewer-count polling foundation
 - multiple simultaneous X livechat capture targets
+- visual style presets, including a MarketBubble-inspired default
 
 Live Session settings are stored in `LIVE_SESSION_FILE`, defaulting to `.data/live-session.json`. Environment variables still provide first-boot defaults for dashboard title, native chat label, and stream URLs.
+
+## Visual Direction
+
+MarketBubble's public site is a dark Framer-built brand experience using high-contrast white text, near-black surfaces, DM Sans / Host Grotesk typography, and pale chartreuse as a signature accent. The app should borrow that energy without becoming a marketing page: dense chat and stream utility stay primary, while the visual system adds identity through sharper typography, dramatic dark surfaces, thin glowing borders, and style presets that can be cycled live.
 
 ## Open Questions
 
