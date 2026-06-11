@@ -25,7 +25,7 @@ import {
   WifiOff,
   X
 } from "lucide-react";
-import { forwardRef, memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type HTMLAttributes } from "react";
 import { Virtuoso, type Components, type ScrollerProps, type VirtuosoHandle } from "react-virtuoso";
 import { isNativeMarketBubbleMessage, type ChatMessage, type Platform, type StreamSource, type ViewerSnapshot } from "../shared/chat";
 import {
@@ -134,34 +134,44 @@ const virtuosoComponents: Components<ChatMessage, ChatVirtuosoContext> = {
     { context, ...props },
     ref
   ) {
+    const forwardedHandlers = props as HTMLAttributes<HTMLDivElement>;
+
     return (
       <div
         {...props}
         ref={ref}
         onScroll={(event) => {
+          forwardedHandlers.onScroll?.(event);
           context.onScrollPositionChange(event.currentTarget.scrollTop);
         }}
         onWheel={(event) => {
+          forwardedHandlers.onWheel?.(event);
           if (event.deltaY < -1) {
             context.onUserScrollIntent();
           }
         }}
-        onTouchStart={() => {
+        onTouchStart={(event) => {
+          forwardedHandlers.onTouchStart?.(event);
           context.onUserScrollIntent();
         }}
         onPointerDown={(event) => {
+          forwardedHandlers.onPointerDown?.(event);
           if (event.target === event.currentTarget) {
             context.onUserScrollIntent();
           }
         }}
         onKeyDown={(event) => {
+          forwardedHandlers.onKeyDown?.(event);
           if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
             context.onUserScrollIntent();
           }
         }}
       />
     );
-  })
+  }),
+  Footer: function ChatListFooter() {
+    return <div className="message-list-bottom-spacer" aria-hidden="true" />;
+  }
 };
 
 const StreamEmbedFrame = memo(function StreamEmbedFrame({

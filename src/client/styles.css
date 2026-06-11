@@ -2076,6 +2076,10 @@ h1 {
   font-size: 13px;
 }
 
+.message-list-bottom-spacer {
+  height: 10px;
+}
+
 .jump-current-button {
   position: absolute;
   right: 14px;
@@ -3319,7 +3323,9 @@ h1 {
 
 .public-message-list {
   position: relative;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   font-size: 13px;
 }
 
