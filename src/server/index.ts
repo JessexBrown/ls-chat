@@ -164,6 +164,22 @@ const betterTtvService = new BetterTtvService({ ttlMs: betterTtvCacheTtlMs });
 const nativeModerationStore = new NativeModerationStore();
 const nativeMessageModerationKeys = new Map<string, string>();
 const nativeUserModerationKeys = new Map<string, Set<string>>();
+const kickWebhookDiagnostics = {
+  received: 0,
+  accepted: 0,
+  invalidSignature: 0,
+  ignoredEventType: 0,
+  ingestionPaused: 0,
+  broadcasterNotTracked: 0,
+  invalidPayload: 0,
+  lastReceivedAt: null as string | null,
+  lastAcceptedAt: null as string | null,
+  lastRejectedAt: null as string | null,
+  lastRejectedReason: null as string | null,
+  lastEventType: null as string | null,
+  lastChannelId: null as string | null,
+  lastChannelName: null as string | null
+};
 
 const mockMessageSchema = z.object({
   platform: platformSchema.default("twitch"),
@@ -1771,7 +1787,10 @@ function publicKickConfig() {
     broadcasterName: kickRuntimeConfig.broadcasterName,
     trackedBroadcasters: kickRuntimeConfig.trackedBroadcasters,
     credentialsPresent: kickCredentialsPresent(),
-    signatureVerification: Boolean(process.env.KICK_PUBLIC_KEY_PEM)
+    signatureVerification: Boolean(process.env.KICK_PUBLIC_KEY_PEM),
+    webhookDiagnostics: {
+      ...kickWebhookDiagnostics
+    }
   };
 }
 
@@ -2256,6 +2275,14 @@ app.get("/api/public/config", (req, res) => {
   res.json({
     dashboard: publicDashboardConfig(req),
     sources: sourceHub.snapshot(),
+    kickWebhook: {
+      ingress: "/api/webhooks/kick",
+      signatureVerification: Boolean(process.env.KICK_PUBLIC_KEY_PEM),
+      trackedBroadcasterCount: kickRuntimeConfig.trackedBroadcasters.length,
+      diagnostics: {
+        ...kickWebhookDiagnostics
+      }
+    },
     xLiveChatCapture: publicXLiveChatCaptureConfig()
   });
 });
@@ -2542,23 +2569,58 @@ app.post("/api/webhooks/twitch/eventsub", (req: RawBodyRequest, res: Response) =
 });
 
 app.post("/api/webhooks/kick", (req: RawBodyRequest, res: Response) => {
+  kickWebhookDiagnostics.received += 1;
+  kickWebhookDiagnostics.lastReceivedAt = new Date().toISOString();
+  kickWebhookDiagnostics.lastEventType = req.header("Kick-Event-Type") ?? null;
+
   const verification = verifyKickSignature(req);
 
   if (!verification.ok) {
+    kickWebhookDiagnostics.invalidSignature += 1;
+    kickWebhookDiagnostics.lastRejectedAt = new Date().toISOString();
+    kickWebhookDiagnostics.lastRejectedReason = "invalid_signature";
+    statuses.set("kick", "error", "Kick webhook rejected: invalid signature.");
     return sendError(res, 403, "Invalid Kick webhook signature.");
   }
 
   const eventType = req.header("Kick-Event-Type");
   if (eventType && eventType !== "chat.message.sent") {
+    kickWebhookDiagnostics.ignoredEventType += 1;
+    kickWebhookDiagnostics.lastRejectedAt = new Date().toISOString();
+    kickWebhookDiagnostics.lastRejectedReason = `ignored_event_type:${eventType}`;
     return res.status(202).json({ accepted: true, ignored: true });
   }
 
   if (!kickRuntimeConfig.ingestionEnabled) {
+    kickWebhookDiagnostics.ingestionPaused += 1;
+    kickWebhookDiagnostics.lastRejectedAt = new Date().toISOString();
+    kickWebhookDiagnostics.lastRejectedReason = "kick_ingestion_paused";
     return res.status(202).json({ accepted: true, ignored: true, reason: "kick_ingestion_paused" });
   }
 
-  const message = normalizeKickChatMessage(req.body);
+  let message: ChatMessage;
+  try {
+    message = normalizeKickChatMessage(req.body);
+  } catch (error) {
+    kickWebhookDiagnostics.invalidPayload += 1;
+    kickWebhookDiagnostics.lastRejectedAt = new Date().toISOString();
+    kickWebhookDiagnostics.lastRejectedReason = "invalid_payload";
+    statuses.set("kick", "error", `Kick webhook payload normalization failed: ${String(error)}`);
+    return sendError(res, 400, "Invalid Kick webhook payload.");
+  }
+
+  kickWebhookDiagnostics.lastChannelId = message.channelId;
+  kickWebhookDiagnostics.lastChannelName = message.channelName;
+
   if (!kickMessageMatchesTrackedBroadcaster(message)) {
+    kickWebhookDiagnostics.broadcasterNotTracked += 1;
+    kickWebhookDiagnostics.lastRejectedAt = new Date().toISOString();
+    kickWebhookDiagnostics.lastRejectedReason = "kick_broadcaster_not_tracked";
+    statuses.set(
+      "kick",
+      "error",
+      `Kick webhook ignored for untracked broadcaster ${message.channelName ?? message.channelId ?? "unknown"}.`
+    );
     return res.status(202).json({
       accepted: true,
       ignored: true,
@@ -2569,6 +2631,10 @@ app.post("/api/webhooks/kick", (req: RawBodyRequest, res: Response) => {
   }
 
   const added = publish(message);
+  kickWebhookDiagnostics.accepted += 1;
+  kickWebhookDiagnostics.lastAcceptedAt = new Date().toISOString();
+  kickWebhookDiagnostics.lastRejectedReason = null;
+  statuses.set("kick", "connected", `Kick webhook received chat from ${message.channelName ?? message.channelId ?? "tracked channel"}.`);
   res.status(added ? 202 : 200).json({ accepted: true, added });
 });
 
