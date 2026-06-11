@@ -116,6 +116,20 @@ export function makeMessageId(platform: Platform, platformMessageId: string) {
   return `${platform}:${platformMessageId}`;
 }
 
+export function isNativeMarketBubbleMessage(
+  message: Pick<ChatMessage, "platform" | "platformMessageId" | "sourceId" | "channelId">
+) {
+  return (
+    message.platform === "marketbubble" &&
+    message.platformMessageId.startsWith("native-") &&
+    (message.sourceId === "marketbubble:native-live" || message.channelId === "marketbubble-native-live")
+  );
+}
+
+export function isNativeMarketBubbleMessageId(id: string) {
+  return id.startsWith("marketbubble:native-");
+}
+
 export function normalizeTimestamp(value: string | null | undefined) {
   if (!value) {
     return null;

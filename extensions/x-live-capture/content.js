@@ -37,8 +37,8 @@
     return rect.width > 0 && rect.height > 0;
   }
 
-  function isBroadcastPage() {
-    return /\/i\/broadcasts\//.test(window.location.pathname);
+  function isXLiveChatPage() {
+    return /\/i\/broadcasts\//.test(window.location.pathname) || /\/[^/]+\/livechat\/?$/.test(window.location.pathname);
   }
 
   function pageChannelName() {
@@ -77,7 +77,7 @@
       "box-shadow:0 16px 50px rgba(0,0,0,.45)"
     ].join(";");
     panel.innerHTML = `
-      <strong style="display:block;margin-bottom:6px;">LS Chat X Capture</strong>
+      <strong style="display:block;margin-bottom:6px;">Market Bubble X Capture</strong>
       <span data-ls-status>Ready.</span>
     `;
     document.documentElement.appendChild(panel);
@@ -99,6 +99,48 @@
       .filter((line) => !/^\d+\s?(s|m|h|d)$/.test(line));
   }
 
+  function parseXLiveChatText(value) {
+    const text = cleanText(value);
+    if (!text || text === "Chat" || text.length > 500) {
+      return null;
+    }
+
+    const repostMatch = /^([A-Za-z0-9_]{1,32})\s+(reposted the stream!)$/i.exec(text);
+    if (repostMatch) {
+      return {
+        username: repostMatch[1],
+        displayName: repostMatch[1],
+        message: repostMatch[2]
+      };
+    }
+
+    const handleMatches = Array.from(text.matchAll(/@[A-Za-z0-9_]{1,32}\b/g));
+    if (handleMatches.length === 0) {
+      return null;
+    }
+
+    if (handleMatches.length > 1 && text.length > 180) {
+      return null;
+    }
+
+    const handleMatch = handleMatches[0];
+    const handleIndex = handleMatch.index || 0;
+    const handleText = handleMatch[0] || "";
+    const displayName = cleanText(text.slice(0, handleIndex).replace(/^Chat\s+/i, ""));
+    const message = cleanText(text.slice(handleIndex + handleText.length));
+    const username = handleText.replace(/^@/, "");
+
+    if (!username || !displayName || !message || username === message || message.length > 500) {
+      return null;
+    }
+
+    return {
+      username,
+      displayName,
+      message
+    };
+  }
+
   function parseRow(element) {
     if (!isVisible(element)) {
       return null;
@@ -110,6 +152,11 @@
     }
 
     const combined = cleanText(lines.join(" "));
+    const xLiveChatMatch = parseXLiveChatText(combined);
+    if (xLiveChatMatch) {
+      return xLiveChatMatch;
+    }
+
     const inlineMatch = /^@?([A-Za-z0-9_]{1,32})\s*[:\-]\s+(.{1,500})$/.exec(combined);
     if (inlineMatch) {
       return {
@@ -360,7 +407,7 @@
     if (message?.type === "ls-chat-x-status") {
       sendResponse({
         ok: true,
-        isBroadcastPage: isBroadcastPage(),
+        isXLiveChatPage: isXLiveChatPage(),
         capturing: Boolean(state.root),
         selecting: state.selecting,
         status: state.lastStatus ?? "Ready."

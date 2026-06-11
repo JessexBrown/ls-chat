@@ -27,8 +27,8 @@ async function activeTab() {
   return tab;
 }
 
-function broadcastUrl(tab) {
-  return Boolean(tab?.url && /https:\/\/(x|twitter|mobile\.x)\.com\/i\/broadcasts\//.test(tab.url));
+function xLiveChatUrl(tab) {
+  return Boolean(tab?.url && /^https:\/\/(x|twitter|mobile\.x)\.com\/(i\/broadcasts\/|[^/?#]+\/livechat)/i.test(tab.url));
 }
 
 async function sendToActiveTab(type, options) {
@@ -37,8 +37,8 @@ async function sendToActiveTab(type, options) {
     throw new Error("No active tab found.");
   }
 
-  if (!broadcastUrl(tab)) {
-    throw new Error("Open an X broadcast tab first.");
+  if (!xLiveChatUrl(tab)) {
+    throw new Error("Open an X broadcast or /livechat tab first.");
   }
 
   return chrome.tabs.sendMessage(tab.id, { type, options });
@@ -66,9 +66,9 @@ async function saveSettings() {
 async function refreshStatus() {
   try {
     const tab = await activeTab();
-    if (!broadcastUrl(tab)) {
+    if (!xLiveChatUrl(tab)) {
       setState("Idle");
-      setStatus("Open an X broadcast tab first.");
+      setStatus("Open an X broadcast or /livechat tab first.");
       return;
     }
 
@@ -77,7 +77,7 @@ async function refreshStatus() {
     setStatus(response?.status ?? "Ready.");
   } catch {
     setState("Idle");
-    setStatus("Reload the X broadcast tab, then try again.");
+    setStatus("Reload the X broadcast or /livechat tab, then try again.");
   }
 }
 

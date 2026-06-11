@@ -188,6 +188,8 @@ const X_LIVE_CHAT_SCAN_EXPRESSION = String.raw`
 })()
 `;
 
+const chromeOutputLimit = 2000;
+
 class CdpClient {
   private socket: WebSocket | null = null;
   private nextId = 1;
@@ -261,6 +263,8 @@ export class XLiveChatCaptureWorker {
   private readonly seenIds = new Set<string>();
   private spawnedChrome = false;
   private targetOpenRequested = false;
+  private lastChromeExit: string | null = null;
+  private chromeOutput = "";
 
   constructor(options: XLiveChatCaptureWorkerOptions) {
     this.options = options;
@@ -328,23 +332,48 @@ export class XLiveChatCaptureWorker {
     }
 
     fs.mkdirSync(this.options.userDataDir, { recursive: true });
-    this.chromeProcess = spawn(
-      this.options.chromePath,
-      [
-        `--remote-debugging-port=${this.options.debugPort}`,
-        `--user-data-dir=${this.options.userDataDir}`,
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--new-window",
-        this.options.targetUrl
-      ],
-      {
-        detached: false,
-        stdio: "ignore",
-        windowsHide: false
-      }
-    );
+    this.lastChromeExit = null;
+    this.chromeOutput = "";
+    try {
+      this.chromeProcess = spawn(
+        this.options.chromePath,
+        [
+          `--remote-debugging-port=${this.options.debugPort}`,
+          "--remote-debugging-address=127.0.0.1",
+          `--user-data-dir=${this.options.userDataDir}`,
+          "--profile-directory=Default",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-background-mode",
+          "--disable-features=ProcessSingletonDialog",
+          "--no-process-singleton-dialog",
+          "--new-window",
+          this.options.targetUrl
+        ],
+        {
+          detached: false,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: false
+        }
+      );
+    } catch (error) {
+      this.lastChromeExit = this.describeChromeLaunchError(error);
+      this.options.statuses.set("x", "error", this.lastChromeExit);
+      throw new Error(this.lastChromeExit);
+    }
     this.spawnedChrome = true;
+    this.chromeProcess.stdout?.on("data", (chunk) => this.captureChromeOutput(chunk));
+    this.chromeProcess.stderr?.on("data", (chunk) => this.captureChromeOutput(chunk));
+    this.chromeProcess.once("error", (error) => {
+      this.lastChromeExit = this.describeChromeLaunchError(error);
+      this.options.statuses.set("x", "error", this.lastChromeExit);
+    });
+    this.chromeProcess.once("exit", (code, signal) => {
+      this.lastChromeExit = this.describeChromeExit(code, signal);
+      if (!this.cdp?.isOpen()) {
+        this.options.statuses.set("x", "error", this.lastChromeExit);
+      }
+    });
   }
 
   private async debugEndpointAvailable() {
@@ -362,7 +391,16 @@ export class XLiveChatCaptureWorker {
     const normalizedTargetUrl = this.normalizeTargetUrl(this.options.targetUrl);
 
     while (Date.now() < deadline) {
-      const targets = await this.listTargets().catch(() => []);
+      let targets: CdpTarget[];
+      try {
+        targets = await this.listTargets();
+      } catch {
+        if (this.lastChromeExit) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
       lastTargets = targets;
       const matchingTarget = targets.find(
         (target) => target.type === "page" && this.normalizeTargetUrl(target.url) === normalizedTargetUrl
@@ -372,15 +410,15 @@ export class XLiveChatCaptureWorker {
         return matchingTarget;
       }
 
-      if (!this.targetOpenRequested && targets.some((target) => target.type === "page")) {
-        this.targetOpenRequested = true;
-        await this.openTarget();
+      if (!this.targetOpenRequested) {
+        this.targetOpenRequested = await this.openTarget();
       }
 
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
-    throw new Error(`Unable to find Chrome page target. Found ${lastTargets.length} target(s).`);
+    const chromeExitDetail = this.lastChromeExit ? `${this.lastChromeExit}. ` : "";
+    throw new Error(`${chromeExitDetail}Unable to find Chrome page target. Found ${lastTargets.length} target(s).`);
   }
 
   private normalizeTargetUrl(value: string) {
@@ -395,9 +433,16 @@ export class XLiveChatCaptureWorker {
 
   private async openTarget() {
     try {
-      await fetch(this.debugUrl(`/json/new?${encodeURIComponent(this.options.targetUrl)}`), { method: "PUT" });
+      const putResponse = await fetch(this.debugUrl(`/json/new?${encodeURIComponent(this.options.targetUrl)}`), { method: "PUT" });
+      if (putResponse.ok) {
+        return true;
+      }
+
+      const getResponse = await fetch(this.debugUrl(`/json/new?${encodeURIComponent(this.options.targetUrl)}`));
+      return getResponse.ok;
     } catch {
       // Older Chrome builds may not support /json/new PUT. The initial launch URL is still the primary path.
+      return false;
     }
   }
 
@@ -407,6 +452,36 @@ export class XLiveChatCaptureWorker {
       throw new Error(`Chrome target lookup failed with ${response.status}.`);
     }
     return (await response.json()) as CdpTarget[];
+  }
+
+  private captureChromeOutput(chunk: Buffer | string) {
+    this.chromeOutput = `${this.chromeOutput}${chunk.toString()}`.slice(-chromeOutputLimit);
+  }
+
+  private describeChromeExit(code: number | null, signal: NodeJS.Signals | null) {
+    const codeText = code ?? "unknown";
+    const signalText = signal ?? "none";
+    const numericCode = typeof code === "number" ? code : null;
+    const hexCode = numericCode === null ? null : `0x${(numericCode >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+    const signedCode = numericCode !== null && numericCode > 0x7fffffff ? numericCode - 0x100000000 : numericCode;
+    const signedText = signedCode !== null && signedCode !== numericCode ? ` / signed ${signedCode}` : "";
+    const output = this.chromeOutput.trim().replace(/\s+/g, " ");
+    const outputText = output ? ` Chrome output: ${output}` : "";
+    const profileHint =
+      signedCode === -36863
+        ? ` This usually means Chrome refused the remote-debugging launch before binding port ${this.options.debugPort}. Close any existing Market Bubble X capture Chrome window using ${this.options.userDataDir}, or switch X_LIVE_CHAT_PROFILE_DIR to a fresh profile and sign into X there.`
+        : ` Chrome never exposed http://127.0.0.1:${this.options.debugPort}; check that the profile is not already open, the browser path is correct, and local browser policies allow remote debugging.`;
+
+    return `Chrome exited before DevTools attached (code ${codeText}${hexCode ? ` / ${hexCode}` : ""}${signedText}, signal ${signalText}).${profileHint}${outputText}`;
+  }
+
+  private describeChromeLaunchError(error: unknown) {
+    const message = String(error);
+    const permissionHint =
+      message.includes("EPERM")
+        ? ` Windows denied launching ${this.options.chromePath} from the current server process. If this app was started by an automation/background runner, start it from a normal user terminal for X auto-capture, or use the X capture extension/bridge.`
+        : "";
+    return `Chrome launch error: ${message}.${permissionHint}`;
   }
 
   private async scan() {

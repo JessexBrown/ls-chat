@@ -19,10 +19,10 @@ Last updated: 2026-06-10
 - Store credentials securely.
 - Add integration health states and reconnect telemetry.
 
-## Phase 3: MarketBubble Live Hub
+## Phase 3: Market Bubble Live Hub
 
-- Add MarketBubble public dashboard at `/live`.
-- Add native MarketBubble chat ingestion.
+- Add Market Bubble public dashboard at `/live`.
+- Add native Market Bubble chat ingestion.
 - Add source metadata and combined viewer-count snapshots.
 - Poll Twitch and Kick viewer counts.
 - Track multiple X livechat capture targets.
@@ -32,10 +32,10 @@ Last updated: 2026-06-10
 
 - Add public chat rate limiting and abuse controls.
 - Add account-backed native chat identity.
-- Add moderation controls for native MarketBubble messages.
+- Add moderation controls for native Market Bubble messages.
 - Add source-level visibility controls for public dashboard sessions.
 - Add reliable X viewer-count capture if technically feasible.
-- Add event/session configuration for multiple named MarketBubble broadcasts.
+- Add event/session configuration for multiple named Market Bubble broadcasts.
 - Expand the admin stats dashboard from retained-buffer metrics into persisted live-session analytics.
 
 ## Phase 5: Persistence and Operations
@@ -54,7 +54,7 @@ Last updated: 2026-06-10
 - Add role-based access if the app becomes multi-user.
 - Add retention controls.
 - Add audit trails for integration changes.
-- Add account-backed or signed-session identity for MarketBubble native chat.
+- Add account-backed or signed-session identity for Market Bubble native chat.
 
 ## Phase 7: Scale and Polish
 

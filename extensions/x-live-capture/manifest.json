@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "LS Chat X Live Capture",
-  "description": "Capture visible X broadcast chat messages and forward them to a local LS Chat server.",
+  "name": "Market Bubble X Live Capture",
+  "description": "Capture visible X broadcast chat messages and forward them to a local Market Bubble Live Chat server.",
   "version": "0.1.0",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "LS Chat X Capture"
+    "default_title": "Market Bubble X Capture"
   },
   "permissions": ["storage", "tabs"],
   "host_permissions": [

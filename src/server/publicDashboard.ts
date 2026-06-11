@@ -10,7 +10,12 @@ type PublicDashboardOptions = {
 };
 
 export function buildPublicDashboardConfig(options: PublicDashboardOptions) {
-  const publicUrl = `${options.protocol}://${options.parentHost}/live`;
+  const publicBaseUrl = `${options.protocol}://${options.parentHost}`;
+  const publicUrl = `${publicBaseUrl}/live`;
+  const embedUrl = `${publicBaseUrl}/embed`;
+  const chatEmbedUrl = `${embedUrl}?view=chat`;
+  const mockPageUrl = `${publicBaseUrl}/mock-marketbubble`;
+  const publicConfigUrl = `${publicBaseUrl}/api/public/config`;
   const streamEmbedUrl = buildStreamEmbedUrl({
     streamEmbedUrl: options.session.streamEmbedUrl,
     streamWatchUrl: options.session.streamWatchUrl,
@@ -25,6 +30,11 @@ export function buildPublicDashboardConfig(options: PublicDashboardOptions) {
       sources: options.sources.sources,
       parentHost: options.parentHost
     }),
+    embedUrl,
+    fullEmbedUrl: embedUrl,
+    chatEmbedUrl,
+    mockPageUrl,
+    publicConfigUrl,
     publicUrl
   };
 }
@@ -46,7 +56,7 @@ export function buildStreamSources(options: {
   addStreamSource(streamSources, seen, {
     id: "session:primary",
     platform: null,
-    label: "Primary Feed",
+    label: options.session.streamLabel ?? "Primary Feed",
     embedUrl: primaryEmbedUrl,
     watchUrl: primaryWatchUrl,
     viewerCount: null,

@@ -1,0 +1,105 @@
+services:
+  - type: web
+    name: marketbubble-live-chat
+    runtime: node
+    plan: free
+    region: ohio
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/public/config
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PUBLIC_LIVE_ONLY
+        value: "false"
+      - key: DEMO_CHAT_ENABLED
+        value: "false"
+      - key: DEMO_CHAT_FORCE
+        value: "false"
+      - key: CHAT_HISTORY_LIMIT
+        value: "500"
+      - key: VIEWER_POLL_MS
+        value: "30000"
+      - key: BETTERTTV_CACHE_TTL_MS
+        value: "600000"
+      - key: MARKETBUBBLE_DASHBOARD_TITLE
+        value: Market Bubble Live
+      - key: MARKETBUBBLE_CHAT_LABEL
+        value: Market Bubble
+      - key: MARKETBUBBLE_STREAM_LABEL
+        value: Banks
+      - key: MARKETBUBBLE_STREAM_EMBED_URL
+        value: https://www.twitch.tv/fazebanks
+      - key: MARKETBUBBLE_STREAM_WATCH_URL
+        value: https://www.twitch.tv/fazebanks
+      - key: EMBED_ALLOWED_ORIGINS
+        value: https://marketbubble.com,https://www.marketbubble.com
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_SESSION_COOKIE
+        value: mb_operator_session
+      - key: ADMIN_SESSION_MAX_AGE_SECONDS
+        value: "86400"
+      - key: ADMIN_SESSION_SAME_SITE
+        value: lax
+      - key: NATIVE_CHAT_SESSION_SECRET
+        generateValue: true
+      - key: NATIVE_CHAT_SESSION_COOKIE
+        value: mb_native_guest
+      - key: NATIVE_CHAT_SESSION_MAX_AGE_SECONDS
+        value: "2592000"
+      - key: NATIVE_CHAT_SESSION_SAME_SITE
+        value: lax
+      - key: NATIVE_CHAT_RATE_LIMIT
+        value: "8"
+      - key: NATIVE_CHAT_RATE_WINDOW_MS
+        value: "10000"
+      - key: TWITCH_EVENTSUB_ENABLED
+        value: "false"
+      - key: TWITCH_CLIENT_ID
+        sync: false
+      - key: TWITCH_CLIENT_SECRET
+        sync: false
+      - key: TWITCH_REDIRECT_URI
+        sync: false
+      - key: TWITCH_OAUTH_SCOPES
+        value: user:read:chat
+      - key: TWITCH_BROADCASTER_USER_ID
+        value: "695034438"
+      - key: TWITCH_EVENTSUB_SECRET
+        generateValue: true
+      - key: KICK_AUTO_SUBSCRIBE
+        value: "false"
+      - key: KICK_INGESTION_ENABLED
+        value: "true"
+      - key: KICK_CLIENT_ID
+        sync: false
+      - key: KICK_CLIENT_SECRET
+        sync: false
+      - key: KICK_REDIRECT_URI
+        sync: false
+      - key: KICK_WEBHOOK_URL
+        sync: false
+      - key: KICK_OAUTH_SCOPES
+        value: events:subscribe channel:read
+      - key: KICK_BROADCASTER_USER_ID
+        value: "110326750"
+      - key: KICK_PUBLIC_KEY_PEM
+        sync: false
+      - key: X_STREAM_ENABLED
+        value: "false"
+      - key: X_FILTER_RULES
+        value: "@blknoiz06|Market Bubble X target;@Banks|Market Bubble X target"
+      - key: X_LIVE_CHAT_WORKER_AUTO_START
+        value: "false"
+      - key: X_LIVE_CHAT_TARGETS
+        value: blknoiz06,Banks
+      - key: X_LIVE_CAPTURE_ALLOW_EXTENSION_ORIGINS
+        value: "true"
+      - key: X_LIVE_CAPTURE_ALLOWED_ORIGINS
+        value: https://x.com,https://twitter.com,https://mobile.x.com
+      - key: X_LIVE_CAPTURE_TOKEN
+        generateValue: true

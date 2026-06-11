@@ -16,7 +16,7 @@ const samples: Array<{
     username: "pixelpilot",
     displayName: "PixelPilot",
     channelName: "TwitchDev",
-    message: "Audio is clean and the new overlay looks sharp.",
+    message: "Audio is clean and the new overlay looks sharp monkaS",
     color: "#a78bfa",
     badges: [{ label: "subscriber", type: "12", count: 12 }]
   },
@@ -65,7 +65,7 @@ const samples: Array<{
     sourceKind: "chat",
     username: "nativefan",
     displayName: "nativefan",
-    channelName: "MarketBubble",
+    channelName: "Market Bubble",
     message: "The shared chat makes this feel like one room.",
     color: "#32d9c3",
     badges: [{ label: "Native", type: "marketbubble-native", count: null }]

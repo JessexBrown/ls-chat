@@ -1,6 +1,6 @@
-# LS Chat X Live Capture Extension
+# Market Bubble X Live Capture Extension
 
-This unpacked Chrome/Edge extension captures visible chat rows from an open X broadcast page and forwards them to a local LS Chat server.
+This unpacked Chrome/Edge extension captures visible chat rows from an open X broadcast page and forwards them to a local Market Bubble Live Chat server.
 
 ## Install
 
@@ -18,14 +18,15 @@ Pin the extension if you want quick access from the toolbar.
 
 ## Use
 
-1. Start LS Chat locally.
-2. Open an X broadcast URL such as:
+1. Start Market Bubble Live Chat locally.
+2. Open an X broadcast or livechat URL such as:
 
 ```text
 https://x.com/i/broadcasts/1rGmqqbWLQLGy
+https://x.com/Banks/livechat
 ```
 
-3. Click the `LS Chat X Capture` extension icon.
+3. Click the `Market Bubble X Capture` extension icon.
 4. Keep the endpoint as:
 
 ```text
@@ -36,7 +37,7 @@ http://localhost:4200/api/capture/x-live
 6. Click `Start`.
 7. If the extension asks you to select the chat area, click the visible chat panel or one recent chat message on the X page.
 
-Captured rows should appear in LS Chat as platform `X`.
+Captured rows should appear in Market Bubble Live Chat as platform `X`.
 
 ## Token
 
@@ -44,7 +45,7 @@ If the server has `X_LIVE_CAPTURE_TOKEN` set, put the same value in the extensio
 
 ## Troubleshooting
 
-- If the popup says `Open an X broadcast tab first`, make sure the active tab URL is an X broadcast page.
+- If the popup says `Open an X broadcast or /livechat tab first`, make sure the active tab URL is an X broadcast page or `https://x.com/<username>/livechat`.
 - If no messages appear, click `Select Area` and choose the chat panel manually.
-- If posting fails, confirm LS Chat is running and the server has been restarted after adding the capture endpoint.
+- If posting fails, confirm Market Bubble Live Chat is running and the server has been restarted after adding the capture endpoint.
 - If X changes its page markup, the content script selector may need adjustment.

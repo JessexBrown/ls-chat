@@ -85,26 +85,67 @@ Development-only normalized mock ingestion.
 }
 ```
 
-### `POST /api/native-chat/messages`
+### `GET /api/native-chat/session`
 
-Publishes a first-party MarketBubble native chat message into the same normalized chat stream.
+Issues or refreshes a signed native Market Bubble guest session. The response contains the viewer identity that `/live` should display in the native chat composer. The session is also stored in an HttpOnly cookie named `mb_native_guest` by default.
 
 ```json
 {
-  "clientId": "guest_local_browser_id",
-  "username": "viewer_name",
-  "message": "hello from MarketBubble"
+  "identity": {
+    "kind": "guest",
+    "clientId": "guest_abc123",
+    "displayName": "Guest ABC123",
+    "issuedAt": "2026-06-10T16:00:00.000Z",
+    "lastSeenAt": "2026-06-10T16:00:00.000Z"
+  },
+  "nativeChatLabel": "Market Bubble",
+  "maxMessageLength": 500
 }
 ```
 
-The endpoint trims usernames/messages, caps usernames at 32 characters, caps messages at 500 characters, accepts an optional stable local `clientId`, and applies a small in-memory per-client rate limit. When `clientId` is present, native messages use `platformUserId: "marketbubble:<clientId>"` so moderation/debugging can distinguish repeat browser sessions from editable display names. The public `/live` composer assigns its own guest display name from the local `clientId` instead of letting unauthenticated viewers choose arbitrary names.
+### `POST /api/native-chat/messages`
+
+Publishes a first-party Market Bubble native chat message into the same normalized chat stream.
+
+```json
+{
+  "message": "hello from Market Bubble"
+}
+```
+
+The endpoint trims messages, caps messages at 500 characters, refreshes or creates the signed guest session cookie, and applies a small in-memory rate limit keyed to the signed guest identity plus network address. Client-supplied `clientId` and `username` are accepted only as a backward-compatible fallback; when a signed guest session exists, native messages use `platformUserId: "marketbubble:<signedGuestId>"` and the server-issued display name.
 
 ```text
 NATIVE_CHAT_RATE_LIMIT=8
 NATIVE_CHAT_RATE_WINDOW_MS=10000
+NATIVE_CHAT_SESSION_SECRET=long-random-secret
+NATIVE_CHAT_SESSION_COOKIE=mb_native_guest
 ```
 
-When the rate limit is exceeded, the endpoint returns `429`.
+When the rate limit is exceeded, the endpoint returns `429`. When an operator has muted the signed native guest session for the current server run, the endpoint returns `403`.
+
+### `DELETE /api/native-chat/messages/:messageId`
+
+Operator-only endpoint for hiding one retained Market Bubble native chat message. Requires the signed operator session and `X-MB-CSRF`.
+
+The endpoint only accepts true native Market Bubble message IDs such as `marketbubble:native-...`. Twitch, Kick, X, and local mock messages are not moderated through this route.
+
+### `POST /api/native-chat/users/:userId/mute`
+
+Operator-only endpoint for current-session native guest moderation. Requires the signed operator session and `X-MB-CSRF`.
+
+The `userId` must be the normalized native user id from a Market Bubble message, for example `marketbubble:guest_abc123`. The endpoint:
+
+- records an in-memory mute for the current server session
+- hides retained native messages from that guest
+- blocks future `/api/native-chat/messages` sends from that signed guest session
+- also blocks new guest sessions from the same server-side hashed browser/network key when the key is known from retained messages
+
+This survives ordinary cookie clearing on the same browser/network, but it is intentionally not a durable ban yet. A user can still bypass it by changing browser, network, VPN, or device. Persistent timeouts, bans, audit logs, and appeal/moderation history should move into account-backed and database-backed moderation storage.
+
+### `DELETE /api/native-chat/users/:userId/mute`
+
+Operator-only endpoint that removes a current-session native guest mute. This is primarily a support/admin recovery action until a full moderation management UI exists.
 
 ### `GET /api/messages`
 
@@ -116,15 +157,17 @@ Returns the current viewer/source snapshot, including combined known viewer coun
 
 ### `GET /api/public/config`
 
-Returns public dashboard configuration for `/live`, including the configured stream embed URL, switchable stream sources, and current source snapshot.
+Returns public dashboard configuration for `/live` and `/embed`, including the configured stream embed URL, switchable stream sources, drop-in URLs, and current source snapshot.
 
 `streamEmbedUrl` remains available for older clients. New viewer surfaces should prefer `streamSources`.
+
+For website installs, use `fullEmbedUrl` for the full stream-plus-chat product and `chatEmbedUrl` when the host page already has its own video player. `publicConfigUrl` is safe to call from a public website because it does not expose platform secrets or operator controls.
 
 ```json
 {
   "dashboard": {
-    "title": "MarketBubble Live",
-    "nativeChatLabel": "MarketBubble",
+    "title": "Market Bubble Live",
+    "nativeChatLabel": "Market Bubble",
     "streamEmbedUrl": "https://player.twitch.tv/?channel=jynxzi&parent=marketbubble.com&autoplay=false",
     "streamWatchUrl": "https://www.twitch.tv/jynxzi",
     "streamSources": [
@@ -151,7 +194,12 @@ Returns public dashboard configuration for `/live`, including the configured str
         "isPrimary": false
       }
     ],
-    "publicUrl": "https://marketbubble.com/live"
+    "publicUrl": "https://marketbubble.com/live",
+    "embedUrl": "https://marketbubble.com/embed",
+    "fullEmbedUrl": "https://marketbubble.com/embed",
+    "chatEmbedUrl": "https://marketbubble.com/embed?view=chat",
+    "mockPageUrl": "https://marketbubble.com/mock-marketbubble",
+    "publicConfigUrl": "https://marketbubble.com/api/public/config"
   }
 }
 ```
@@ -170,8 +218,8 @@ Supported stream URLs are normalized before being served to `/live`. For example
 
 ```json
 {
-  "title": "MarketBubble Live",
-  "nativeChatLabel": "MarketBubble",
+  "title": "Market Bubble Live",
+  "nativeChatLabel": "Market Bubble",
   "streamEmbedUrl": "https://player.example/embed",
   "streamWatchUrl": "https://marketbubble.com/live",
   "description": "Shared live chat and stream"
@@ -186,11 +234,11 @@ The response includes current integration states for Twitch EventSub WebSocket, 
 
 ### `GET /api/integrations/kick/config`
 
-Returns non-secret Kick runtime configuration, including webhook URL, stored OAuth session status, token source, local ingestion state, scopes, the current broadcaster ID or slug when known, and the tracked broadcaster list used to filter incoming webhook messages.
+Returns non-secret Kick runtime configuration, including webhook URL, stored OAuth session status, authorization mode, local ingestion state, scopes, the current broadcaster ID or slug when known, and the tracked broadcaster list used to filter incoming webhook messages.
 
 ### `POST /api/integrations/kick/subscribe-chat`
 
-Creates or refreshes a Kick `chat.message.sent` webhook subscription and adds the target broadcaster to the local tracked list. OAuth is used for app/operator authorization. When targeting a supplied broadcaster, the server resolves the broadcaster name/ID and uses an app access token with `broadcaster_user_id`.
+Creates or refreshes a Kick `chat.message.sent` webhook subscription and adds the target broadcaster to the local tracked list. Dashboard subscription requires a stored Kick OAuth session. When targeting a supplied broadcaster, the server resolves the broadcaster name/ID and may use app authorization with `broadcaster_user_id` for the Kick webhook call, but app credentials alone do not unlock this manual endpoint.
 
 The request may specify either a readable channel name/slug or numeric broadcaster ID:
 
@@ -214,9 +262,24 @@ This does not configure the public webhook URL inside the Kick developer app. Th
 
 `KICK_WEBHOOK_URL` is exposed in health/config responses for operator visibility only. It documents the public URL configured in Kick, but the current Kick subscription API does not accept a per-request callback URL.
 
+### `PUT /api/runtime-config`
+
+Updates safe process-local runtime settings from the admin Advanced Settings panel. These values do not rewrite `.env`; restart defaults still come from environment variables.
+
+```json
+{
+  "messageHistoryLimit": 500,
+  "viewerPollMs": 30000,
+  "nativeChatRateLimit": 8,
+  "nativeChatRateWindowMs": 10000
+}
+```
+
+`messageHistoryLimit` trims the retained chat buffer immediately and sends connected clients a fresh snapshot.
+
 ### `POST /api/integrations/kick/restart`
 
-Refreshes Kick `chat.message.sent` subscriptions for all tracked broadcasters. If no broadcasters are tracked, it falls back to the current runtime target.
+Refreshes Kick `chat.message.sent` subscriptions for all tracked broadcasters. If no broadcasters are tracked, it falls back to the current runtime target. Dashboard restart requires a stored Kick OAuth session.
 
 ### `DELETE /api/integrations/kick/targets/:target`
 
@@ -287,6 +350,8 @@ Stops one active X livechat browser capture worker. Target IDs are returned in `
 ### `POST /api/capture/x-live`
 
 Experimental local browser-capture bridge for X live broadcast chat. This endpoint is not an X API integration. It accepts chat rows captured from an X broadcast page that the operator has open in their browser and normalizes them as X chat messages.
+
+In production, feed this endpoint from a trusted operator-side capture agent rather than ordinary website visitors. Set `X_LIVE_CAPTURE_TOKEN` on both the public server and the capture machine so random clients cannot inject fake X messages.
 
 The endpoint is CORS-limited by `X_LIVE_CAPTURE_ALLOWED_ORIGINS`, defaulting to `https://x.com`, `https://twitter.com`, `https://mobile.x.com`, `http://localhost:<PORT>`, and `http://127.0.0.1:<PORT>`. Browser extension origins are also allowed unless `X_LIVE_CAPTURE_ALLOW_EXTENSION_ORIGINS=false`. If `X_LIVE_CAPTURE_TOKEN` is configured, requests must include the token in `X-LS-Chat-Capture-Token` or in the JSON body as `token`.
 

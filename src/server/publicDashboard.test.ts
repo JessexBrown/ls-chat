@@ -7,8 +7,9 @@ const now = "2026-06-10T16:00:00.000Z";
 
 const session: LiveSession = {
   id: "default",
-  title: "MarketBubble Live",
-  nativeChatLabel: "MarketBubble",
+  title: "Market Bubble Live",
+  nativeChatLabel: "Market Bubble",
+  streamLabel: null,
   streamEmbedUrl: "https://www.twitch.tv/jynxzi",
   streamWatchUrl: "https://www.twitch.tv/jynxzi",
   description: "The live desk",
@@ -49,9 +50,9 @@ const sources: ViewerSnapshot = {
     {
       id: "marketbubble:native-live",
       platform: "marketbubble",
-      label: "MarketBubble",
+      label: "Market Bubble",
       channelId: "marketbubble-native-live",
-      channelName: "MarketBubble",
+      channelName: "Market Bubble",
       sourceUrl: "https://marketbubble.com/live",
       viewerCount: 3,
       chattersCount: null,
@@ -72,6 +73,11 @@ describe("public dashboard stream sources", () => {
     });
 
     expect(config.streamEmbedUrl).toBe("https://player.twitch.tv/?channel=jynxzi&parent=localhost&autoplay=false");
+    expect(config.embedUrl).toBe("http://localhost:4200/embed");
+    expect(config.fullEmbedUrl).toBe("http://localhost:4200/embed");
+    expect(config.chatEmbedUrl).toBe("http://localhost:4200/embed?view=chat");
+    expect(config.mockPageUrl).toBe("http://localhost:4200/mock-marketbubble");
+    expect(config.publicConfigUrl).toBe("http://localhost:4200/api/public/config");
     expect(config.streamSources).toHaveLength(2);
     expect(config.streamSources[0]).toMatchObject({
       id: "session:primary",
@@ -97,6 +103,20 @@ describe("public dashboard stream sources", () => {
     expect(result.map((source) => source.label)).toEqual(["jynxzi", "jynxzi"]);
     expect(result[0].embedUrl).toBe("https://player.twitch.tv/?channel=jynxzi&parent=marketbubble.com&autoplay=false");
     expect(result[1].embedUrl).toBe("https://player.kick.com/jynxzi");
+  });
+
+  it("uses the configured primary stream label when present", () => {
+    const result = buildStreamSources({
+      session: { ...session, streamLabel: "Banks" },
+      sources: sources.sources,
+      parentHost: "marketbubble.com"
+    });
+
+    expect(result[0]).toMatchObject({
+      id: "session:primary",
+      label: "Banks",
+      isPrimary: true
+    });
   });
 
   it("does not expose development mock sources as viewer stream options", () => {

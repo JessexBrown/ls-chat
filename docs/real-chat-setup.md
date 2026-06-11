@@ -244,7 +244,7 @@ Subscription helper:
 POST /api/integrations/kick/subscribe-chat
 ```
 
-If `KICK_AUTO_SUBSCRIBE=true`, the server refreshes subscriptions for every tracked Kick broadcaster on startup. If no targets are tracked yet, it falls back to the stored Kick OAuth session or configured app-token defaults. The Kick developer app still needs its webhook URL configured to a public HTTPS URL that routes to `/api/webhooks/kick`.
+If `KICK_AUTO_SUBSCRIBE=true`, the server refreshes subscriptions for every tracked Kick broadcaster on startup. If no targets are tracked yet, it falls back to the stored Kick OAuth session or configured app-token defaults. This env-driven path is intended for adminless/public-only boot. The Kick developer app still needs its webhook URL configured to a public HTTPS URL that routes to `/api/webhooks/kick`.
 
 In Source Settings, the Kick section shows whether the token and signature key are present, plus the tracked broadcaster list. Use OAuth to authorize Kick through the app, Subscribe to add or refresh a target broadcaster, Restart to refresh all tracked targets, the target chip remove button to stop accepting events for that broadcaster, and Disconnect to remove the local Kick OAuth session and pause local Kick ingestion. `KICK_WEBHOOK_URL` is displayed there as a reminder of the public URL that should already be configured in Kick.
 
@@ -312,7 +312,9 @@ KICK_SESSION_FILE=.data/kick-session.json
 
 Run the app, open Source Settings, and click OAuth in the Kick section. Kick will redirect back to `KICK_REDIRECT_URI`. The app stores the returned access and refresh tokens in `KICK_SESSION_FILE`, resolves the authenticated channel when Kick grants `channel:read`, and subscribes to `chat.message.sent`.
 
-Kick OAuth is treated as the operator login/authorization step. To subscribe to a different target channel, type that channel into the Kick broadcaster field and click Subscribe. The server resolves the channel name with `channel:read` when available, then creates the `chat.message.sent` subscription with an app access token and `broadcaster_user_id`.
+Kick OAuth is treated as the operator login/authorization step for the authenticated Kick account. To subscribe to a different target channel from the dashboard, first complete Kick OAuth, then type that channel into the Kick broadcaster field and click Subscribe. The server resolves the channel name with `channel:read` when available, then creates the `chat.message.sent` subscription with an app access token and `broadcaster_user_id`.
+
+Dashboard Subscribe and Restart require a stored Kick OAuth session. `KICK_CLIENT_ID` and `KICK_CLIENT_SECRET` may still be used by the backend to mint the app access token that Kick requires for targeted webhook subscriptions, but those credentials alone no longer unlock manual dashboard subscription. Env-driven startup can still use `KICK_AUTO_SUBSCRIBE=true` when you intentionally want a no-dashboard, preconfigured `/live` deployment.
 
 If Kick only returns `events:subscribe`, OAuth can still subscribe for the authenticated channel, but readable channel lookup is skipped. Targeting by channel name/slug requires `channel:read`; without it, use a numeric Kick broadcaster ID.
 
@@ -436,10 +438,11 @@ The app adds missing rules before connecting. If the X API plan does not include
 
 The preferred workaround is controlled from Source Settings:
 
-1. Enter an X username in `Target Account`.
-2. Click `Live Chat`.
-3. Log into X in the opened Chrome/Edge window if prompted.
-4. Leave that window open while LS Chat captures visible chat.
+1. Enter X usernames in `X_LIVE_CHAT_TARGETS`, or enter a username in `Target Account`.
+2. Open Source Settings, switch to `X`, and click `Connect Sources`.
+3. Use the source row links to open the X livechat pages in the operator's browser.
+4. Leave those tabs open while the browser bridge or extension forwards visible chat.
+5. Use `Start Workers` only on a dedicated capture machine where the server can launch Chrome.
 
 Optional environment variables:
 
@@ -448,7 +451,19 @@ X_LIVE_CHAT_CHROME_PATH=
 X_LIVE_CHAT_PROFILE_DIR=.data/x-live-chat-profile
 X_LIVE_CHAT_DEBUG_PORT=9223
 X_LIVE_CHAT_SCAN_MS=1200
+X_LIVE_CHAT_WORKER_AUTO_START=false
+X_LIVE_CHAT_TARGETS=
 ```
+
+For public-facing pages without using the admin dashboard, set `X_LIVE_CHAT_TARGETS` to the desired usernames but keep `X_LIVE_CHAT_WORKER_AUTO_START=false` on the hosted/public app. Run the operator-side capture agent instead:
+
+```bash
+X_LIVE_CAPTURE_ENDPOINT=https://live.marketbubble.com/api/capture/x-live
+X_LIVE_CAPTURE_TOKEN=the-same-token-configured-on-the-server
+npm run capture:x
+```
+
+The capture machine must be able to launch Chrome/Edge and the capture browser profile must be signed into X. `/live` and `/embed` should only display X messages after the capture agent or browser bridge posts them to the server; ordinary visitors should never be prompted to open X.
 
 The app also exposes the older local capture endpoint and helper script:
 
@@ -457,7 +472,7 @@ POST /api/capture/x-live
 GET /x-live-capture.js
 ```
 
-Open the X broadcast page, paste the loader from `docs/x-live-capture.md` into the browser console, then click the visible chat area. The helper observes visible chat rows and forwards them to LS Chat as `platform: "x"` and `sourceKind: "chat"`.
+Open the X broadcast page, paste the loader from `docs/x-live-capture.md` into the browser console, then click the visible chat area. The helper observes visible chat rows and forwards them to Market Bubble Live Chat as `platform: "x"` and `sourceKind: "chat"`.
 
 ## Health Check
 

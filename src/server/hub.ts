@@ -3,7 +3,7 @@ import type { ChatMessage } from "../shared/chat";
 type MessageListener = (message: ChatMessage) => void;
 
 export class ChatHub {
-  private readonly maxMessages: number;
+  private maxMessages: number;
   private readonly messages: ChatMessage[] = [];
   private readonly listeners = new Set<MessageListener>();
   private readonly seenIds = new Set<string>();
@@ -36,6 +36,28 @@ export class ChatHub {
 
   snapshot() {
     return [...this.messages];
+  }
+
+  remove(id: string) {
+    const index = this.messages.findIndex((message) => message.id === id);
+    if (index === -1) {
+      return null;
+    }
+
+    const [removed] = this.messages.splice(index, 1);
+    this.seenIds.delete(removed.id);
+    return removed;
+  }
+
+  setMaxMessages(maxMessages: number) {
+    this.maxMessages = maxMessages;
+
+    while (this.messages.length > this.maxMessages) {
+      const removed = this.messages.shift();
+      if (removed) {
+        this.seenIds.delete(removed.id);
+      }
+    }
   }
 
   subscribe(listener: MessageListener) {

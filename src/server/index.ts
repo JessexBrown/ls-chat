@@ -12,10 +12,36 @@ import { z } from "zod";
 import { normalizeKickChatMessage } from "./adapters/kick";
 import { normalizeTwitchChatMessage } from "./adapters/twitch";
 import { normalizeXFilteredStreamPost, normalizeXLiveCaptureMessage } from "./adapters/x";
+import { BetterTtvService } from "./betterTtv";
 import { createDemoMessage } from "./demo";
+import { parseEmbedAllowedOrigins, securityHeaderSnapshot } from "./embedPolicy";
 import { ChatHub } from "./hub";
 import { LiveSessionStore, liveSessionUpdateSchema } from "./liveSession";
 import { createNativeChatMessage, nativeChatInputSchema } from "./nativeChat";
+import { NativeModerationStore } from "./nativeModeration";
+import {
+  createNativeGuestSession,
+  decodeNativeGuestSession,
+  encodeNativeGuestSession,
+  nativeGuestIdentity,
+  parseCookieHeader,
+  touchNativeGuestSession,
+  type NativeGuestSession
+} from "./nativeSession";
+import {
+  createOperatorCsrfToken,
+  createOperatorSessionToken,
+  isOperatorAuthEnabled,
+  operatorPasswordFromEnv,
+  operatorPasswordMatches,
+  operatorRouteRequiresAuth,
+  operatorRouteRequiresCsrf,
+  parseCookieHeader as parseOperatorCookieHeader,
+  parseOperatorSameSite,
+  verifyOperatorCsrfToken,
+  verifyOperatorSessionToken
+} from "./operatorAuth";
+import { isPublicOnlyMode, publicOnlyRouteAction } from "./publicOnlyMode";
 import { buildPublicDashboardConfig } from "./publicDashboard";
 import { SourceHub } from "./sourceHub";
 import { verifyKickSignature, verifyTwitchSignature, type RawBodyRequest } from "./security";
@@ -24,7 +50,16 @@ import { IntegrationStatusStore } from "./workers/status";
 import { TwitchEventSubWorker } from "./workers/twitchEventSub";
 import { parseXRules, XFilteredStreamWorker } from "./workers/xFilteredStream";
 import { findChromeExecutable, XLiveChatCaptureWorker, xLiveChatChannelFromInput, xLiveChatUrlFromInput } from "./workers/xLiveChatCapture";
-import { chatMessageSchema, makeMessageId, platformSchema, textFragment, type ChatMessage, type Platform } from "../shared/chat";
+import {
+  chatMessageSchema,
+  isNativeMarketBubbleMessage,
+  isNativeMarketBubbleMessageId,
+  makeMessageId,
+  platformSchema,
+  textFragment,
+  type ChatMessage,
+  type Platform
+} from "../shared/chat";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "../..");
@@ -44,13 +79,39 @@ const xLiveChatProfilePath = process.env.X_LIVE_CHAT_PROFILE_DIR
   : path.join(projectRoot, ".data", "x-live-chat-profile");
 const port = Number(process.env.PORT ?? 4200);
 const isProduction = process.env.NODE_ENV === "production";
-const messageHistoryLimit = parsePositiveIntegerEnv("CHAT_HISTORY_LIMIT", 500);
-const viewerPollMs = parsePositiveIntegerEnv("VIEWER_POLL_MS", 30000);
-const nativeChatRateLimit = parsePositiveIntegerEnv("NATIVE_CHAT_RATE_LIMIT", 8);
-const nativeChatRateWindowMs = parsePositiveIntegerEnv("NATIVE_CHAT_RATE_WINDOW_MS", 10000);
+const publicOnlyMode = isPublicOnlyMode(process.env);
+let messageHistoryLimit = parsePositiveIntegerEnv("CHAT_HISTORY_LIMIT", 500);
+let viewerPollMs = parsePositiveIntegerEnv("VIEWER_POLL_MS", 30000);
+let nativeChatRateLimit = parsePositiveIntegerEnv("NATIVE_CHAT_RATE_LIMIT", 8);
+let nativeChatRateWindowMs = parsePositiveIntegerEnv("NATIVE_CHAT_RATE_WINDOW_MS", 10000);
+const betterTtvCacheTtlMs = parsePositiveIntegerEnv("BETTERTTV_CACHE_TTL_MS", 10 * 60 * 1000);
+const nativeChatSessionCookieName = process.env.NATIVE_CHAT_SESSION_COOKIE ?? "mb_native_guest";
+const nativeChatSessionMaxAgeMs = parsePositiveIntegerEnv("NATIVE_CHAT_SESSION_MAX_AGE_SECONDS", 60 * 60 * 24 * 30) * 1000;
+const nativeChatSessionSecret =
+  process.env.NATIVE_CHAT_SESSION_SECRET ?? process.env.SESSION_SECRET ?? crypto.randomBytes(32).toString("base64url");
+const nativeChatSessionSameSite = parseNativeChatSessionSameSite(process.env.NATIVE_CHAT_SESSION_SAME_SITE);
+const operatorAuthEnabled = isOperatorAuthEnabled(process.env);
+const operatorPassword = operatorPasswordFromEnv(process.env);
+const operatorSessionCookieName = process.env.ADMIN_SESSION_COOKIE ?? process.env.OPERATOR_SESSION_COOKIE ?? "mb_operator_session";
+const operatorSessionMaxAgeMs = parsePositiveIntegerEnv("ADMIN_SESSION_MAX_AGE_SECONDS", 60 * 60 * 24) * 1000;
+const operatorSessionSecretConfigured = Boolean(process.env.ADMIN_SESSION_SECRET || process.env.SESSION_SECRET);
+const operatorSessionSecret = process.env.ADMIN_SESSION_SECRET ?? process.env.SESSION_SECRET ?? nativeChatSessionSecret;
+const operatorSessionSameSite = parseOperatorSameSite(process.env.ADMIN_SESSION_SAME_SITE);
+const defaultEmbedAllowedOrigins = [
+  "https://marketbubble.com",
+  "https://www.marketbubble.com",
+  `http://localhost:${port}`,
+  `http://127.0.0.1:${port}`
+];
+const embedAllowedOrigins = parseEmbedAllowedOrigins(
+  process.env.EMBED_ALLOWED_ORIGINS ?? process.env.MARKETBUBBLE_EMBED_ALLOWED_ORIGINS ?? defaultEmbedAllowedOrigins.join(",")
+);
+const securityHeaders = securityHeaderSnapshot(embedAllowedOrigins);
 const marketBubbleSourceId = "marketbubble:native-live";
 const publicStreamEmbedUrl = process.env.MARKETBUBBLE_STREAM_EMBED_URL ?? "";
 const publicStreamWatchUrl = process.env.MARKETBUBBLE_STREAM_WATCH_URL ?? "";
+const xLiveChatStartupTargets = splitDelimitedEnv(process.env.X_LIVE_CHAT_TARGETS);
+const xLiveChatWorkerAutoStart = isEnabled("X_LIVE_CHAT_WORKER_AUTO_START");
 const defaultXLiveCaptureAllowedOrigins = [
   "https://x.com",
   "https://twitter.com",
@@ -72,19 +133,23 @@ const realIngestionEnabled =
   storedTwitchSessionPresent ||
   storedKickSessionPresent ||
   process.env.KICK_AUTO_SUBSCRIBE === "true" ||
-  process.env.X_STREAM_ENABLED === "true";
+  process.env.X_STREAM_ENABLED === "true" ||
+  xLiveChatStartupTargets.length > 0;
 const demoEnabled =
   process.env.DEMO_CHAT_FORCE === "true" || (!realIngestionEnabled && process.env.DEMO_CHAT_ENABLED !== "false");
 
 const app = express();
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
 const hub = new ChatHub(messageHistoryLimit);
 const sourceHub = new SourceHub();
 const liveSessionStore = new LiveSessionStore({
   filePath: liveSessionPath,
   defaults: {
     id: "default",
-    title: process.env.MARKETBUBBLE_DASHBOARD_TITLE ?? "MarketBubble Live",
-    nativeChatLabel: process.env.MARKETBUBBLE_CHAT_LABEL ?? "MarketBubble",
+    title: process.env.MARKETBUBBLE_DASHBOARD_TITLE ?? "Market Bubble Live",
+    nativeChatLabel: process.env.MARKETBUBBLE_CHAT_LABEL ?? "Market Bubble",
+    streamLabel: process.env.MARKETBUBBLE_STREAM_LABEL?.trim() || null,
     streamEmbedUrl: absoluteUrlOrNull(publicStreamEmbedUrl),
     streamWatchUrl: absoluteUrlOrNull(publicStreamWatchUrl),
     description: ""
@@ -95,6 +160,10 @@ const httpServer = createHttpServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const publicViewerSockets = new Set<unknown>();
 const nativeChatRateBuckets = new Map<string, number[]>();
+const betterTtvService = new BetterTtvService({ ttlMs: betterTtvCacheTtlMs });
+const nativeModerationStore = new NativeModerationStore();
+const nativeMessageModerationKeys = new Map<string, string>();
+const nativeUserModerationKeys = new Map<string, Set<string>>();
 
 const mockMessageSchema = z.object({
   platform: platformSchema.default("twitch"),
@@ -115,6 +184,29 @@ const kickTargetSchema = z.object({
 
 const integrationTargetSchema = z.object({
   target: z.string().trim().min(1)
+});
+
+const runtimeConfigUpdateSchema = z.object({
+  messageHistoryLimit: z.number().int().min(50).max(5000).optional(),
+  viewerPollMs: z.number().int().min(5000).max(300000).optional(),
+  nativeChatRateLimit: z.number().int().min(1).max(120).optional(),
+  nativeChatRateWindowMs: z.number().int().min(1000).max(300000).optional()
+});
+
+const operatorLoginSchema = z.object({
+  password: z.string().min(1)
+});
+
+const betterTtvChannelSchema = z.object({
+  channelId: z.string().regex(/^\d+$/, "BetterTTV Twitch channel id must be numeric.")
+});
+
+const retainedMessageParamsSchema = z.object({
+  messageId: z.string().trim().min(1)
+});
+
+const nativeUserParamsSchema = z.object({
+  userId: z.string().trim().min(1).max(160).regex(/^marketbubble:[A-Za-z0-9:_-]+$/)
 });
 
 const xRulesSchema = z.object({
@@ -179,6 +271,63 @@ app.use(
     }
   })
 );
+
+app.use((_req, res, next) => {
+  res.setHeader("Content-Security-Policy", securityHeaders.frameAncestors);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
+
+app.use((req, res, next) => {
+  if (!publicOnlyMode) {
+    return next();
+  }
+
+  const action = publicOnlyRouteAction({
+    method: req.method,
+    path: req.path,
+    accept: req.get("accept")
+  });
+
+  if (action === "redirect") {
+    return res.redirect(302, "/live");
+  }
+
+  if (action === "block") {
+    return sendError(res, 404, "Admin dashboard is disabled in public-only mode.");
+  }
+
+  return next();
+});
+
+app.use((req, res, next) => {
+  if (!operatorAuthEnabled || !operatorRouteRequiresAuth({ method: req.method, path: req.path })) {
+    return next();
+  }
+
+  if (operatorRequestAuthenticated(req)) {
+    return next();
+  }
+
+  return sendError(res, 401, "Operator login required.");
+});
+
+app.use((req, res, next) => {
+  if (!operatorAuthEnabled || !operatorRouteRequiresCsrf({ method: req.method, path: req.path })) {
+    return next();
+  }
+
+  const sessionToken = operatorSessionTokenFromRequest(req);
+  const csrfToken = req.header("X-MB-CSRF") ?? req.header("X-CSRF-Token");
+
+  if (verifyOperatorCsrfToken({ csrfToken, sessionToken, secret: operatorSessionSecret })) {
+    return next();
+  }
+
+  return sendError(res, 403, "Operator CSRF token required.");
+});
 
 function publish(message: ChatMessage | null) {
   if (!message) {
@@ -253,7 +402,7 @@ const platformLabels: Record<Platform, string> = {
   twitch: "Twitch",
   kick: "Kick",
   x: "X",
-  marketbubble: "MarketBubble"
+  marketbubble: "Market Bubble"
 };
 
 function sourceKey(value: string | null | undefined) {
@@ -314,6 +463,27 @@ function sourceUrlForMessage(message: ChatMessage) {
 
 function currentMarketBubbleSourceLabel() {
   return liveSessionStore.get().nativeChatLabel;
+}
+
+function mockChannelForPlatform(platform: Platform, channelName?: string | null) {
+  if (platform === "twitch" && twitchRuntimeConfig.broadcasterUserId) {
+    return {
+      channelId: twitchRuntimeConfig.broadcasterUserId,
+      channelName: channelName ?? twitchRuntimeConfig.broadcasterLogin ?? twitchRuntimeConfig.broadcasterUserId
+    };
+  }
+
+  if (platform === "kick" && kickRuntimeConfig.broadcasterUserId) {
+    return {
+      channelId: kickRuntimeConfig.broadcasterUserId,
+      channelName: channelName ?? kickRuntimeConfig.broadcasterSlug ?? kickRuntimeConfig.broadcasterName ?? kickRuntimeConfig.broadcasterUserId
+    };
+  }
+
+  return {
+    channelId: "local-dev-channel",
+    channelName: channelName ?? "Local Development"
+  };
 }
 
 function sourceIdForPlatform(platform: Platform, channelId: string | null | undefined, channelName: string | null | undefined, fallback: string) {
@@ -377,10 +547,119 @@ function updateMarketBubbleViewerSource() {
   });
 }
 
-function nativeChatClientId(req: Request, nativeClientId?: string) {
+function nativeChatNetworkId(req: Request) {
   const forwardedFor = req.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const networkId = forwardedFor || req.ip || req.socket.remoteAddress || "unknown";
+  return forwardedFor || req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function nativeChatClientId(req: Request, nativeClientId?: string) {
+  const networkId = nativeChatNetworkId(req);
   return nativeClientId ? `${networkId}:${nativeClientId}` : networkId;
+}
+
+function nativeChatModerationKey(req: Request) {
+  const userAgent = req.get("user-agent") ?? "unknown";
+  return crypto
+    .createHmac("sha256", nativeChatSessionSecret)
+    .update(`${nativeChatNetworkId(req)}\n${userAgent}`)
+    .digest("base64url");
+}
+
+function recordNativeMessageModerationKey(message: ChatMessage, moderationKey: string) {
+  if (!isNativeMarketBubbleMessage(message) || !message.platformUserId) {
+    return;
+  }
+
+  nativeMessageModerationKeys.set(message.id, moderationKey);
+  const existingKeys = nativeUserModerationKeys.get(message.platformUserId) ?? new Set<string>();
+  existingKeys.add(moderationKey);
+  nativeUserModerationKeys.set(message.platformUserId, existingKeys);
+
+  if (nativeMessageModerationKeys.size > Math.max(messageHistoryLimit * 3, 1000)) {
+    const retainedIds = new Set(hub.snapshot().map((item) => item.id));
+    for (const messageId of nativeMessageModerationKeys.keys()) {
+      if (!retainedIds.has(messageId)) {
+        nativeMessageModerationKeys.delete(messageId);
+      }
+    }
+  }
+}
+
+function nativeModerationKeysForUser(userId: string) {
+  return new Set(nativeUserModerationKeys.get(userId) ?? []);
+}
+
+function isLocalRequestHost(req: Request) {
+  const host = (req.hostname || req.get("host") || "").replace(/^\[/, "").replace(/\]$/, "").split(":")[0];
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function nativeChatCookieSecure(req: Request) {
+  return nativeChatSessionSameSite === "none" || req.secure || req.get("x-forwarded-proto") === "https" || (isProduction && !isLocalRequestHost(req));
+}
+
+function operatorCookieSecure(req: Request) {
+  return operatorSessionSameSite === "none" || req.secure || req.get("x-forwarded-proto") === "https" || (isProduction && !isLocalRequestHost(req));
+}
+
+function setNativeGuestSessionCookie(req: Request, res: Response, session: NativeGuestSession) {
+  res.cookie(nativeChatSessionCookieName, encodeNativeGuestSession(session, nativeChatSessionSecret), {
+    httpOnly: true,
+    sameSite: nativeChatSessionSameSite,
+    secure: nativeChatCookieSecure(req),
+    maxAge: nativeChatSessionMaxAgeMs,
+    path: "/"
+  });
+}
+
+function nativeGuestSessionFromRequest(req: Request) {
+  return decodeNativeGuestSession(parseCookieHeader(req.header("cookie"), nativeChatSessionCookieName), nativeChatSessionSecret);
+}
+
+function operatorSessionTokenFromRequest(req: Request) {
+  return parseOperatorCookieHeader(req.header("cookie"), operatorSessionCookieName);
+}
+
+function operatorCsrfTokenFromRequest(req: Request) {
+  const sessionToken = operatorSessionTokenFromRequest(req);
+  return sessionToken && verifyOperatorSessionToken(sessionToken, operatorSessionSecret)
+    ? createOperatorCsrfToken(sessionToken, operatorSessionSecret)
+    : null;
+}
+
+function operatorRequestAuthenticated(req: Request) {
+  return !operatorAuthEnabled || verifyOperatorSessionToken(operatorSessionTokenFromRequest(req), operatorSessionSecret);
+}
+
+function setOperatorSessionCookie(req: Request, res: Response) {
+  const sessionToken = createOperatorSessionToken({ secret: operatorSessionSecret, maxAgeMs: operatorSessionMaxAgeMs });
+  res.cookie(
+    operatorSessionCookieName,
+    sessionToken,
+    {
+      httpOnly: true,
+      sameSite: operatorSessionSameSite,
+      secure: operatorCookieSecure(req),
+      maxAge: operatorSessionMaxAgeMs,
+      path: "/"
+    }
+  );
+  return sessionToken;
+}
+
+function clearOperatorSessionCookie(req: Request, res: Response) {
+  res.clearCookie(operatorSessionCookieName, {
+    httpOnly: true,
+    sameSite: operatorSessionSameSite,
+    secure: operatorCookieSecure(req),
+    path: "/"
+  });
+}
+
+function getOrCreateNativeGuestSession(req: Request, res: Response) {
+  const session = touchNativeGuestSession(nativeGuestSessionFromRequest(req) ?? createNativeGuestSession());
+  setNativeGuestSessionCookie(req, res, session);
+  return session;
 }
 
 function canPostNativeChat(clientId: string) {
@@ -419,6 +698,18 @@ function parsePositiveIntegerEnv(name: string, fallback: number) {
 
   const parsed = Number(rawValue);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseNativeChatSessionSameSite(value: string | undefined): "lax" | "strict" | "none" {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "strict" || normalized === "none" ? normalized : "lax";
+}
+
+function splitDelimitedEnv(value: string | undefined) {
+  return (value ?? "")
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function normalizeOauthScopes(value: unknown) {
@@ -648,6 +939,7 @@ function applyStoredTwitchSession(session: TwitchStoredSession) {
     broadcasterLogin: session.broadcaster.login,
     trackedBroadcasters: session.trackedBroadcasters ?? legacyTrackedBroadcaster
   };
+  upsertTwitchTrackedSources();
 }
 
 function currentStoredTwitchSession(validation?: { login: string; user_id: string; scopes?: string[]; expires_in?: number }) {
@@ -936,17 +1228,27 @@ function upsertTwitchTrackedBroadcaster(target: { id: string; login: string | nu
     saveStoredTwitchSession(session);
   }
 
-  sourceHub.upsert({
-    id: sourceIdForPlatform("twitch", nextTarget.userId, nextTarget.login ?? nextTarget.displayName, "Twitch"),
-    platform: "twitch",
-    label: nextTarget.displayName ?? nextTarget.login ?? nextTarget.userId,
-    channelId: nextTarget.userId,
-    channelName: nextTarget.login ?? nextTarget.displayName,
-    sourceUrl: nextTarget.login ? `https://www.twitch.tv/${nextTarget.login}` : null,
-    status: "unknown"
-  });
+  upsertTwitchTrackedSource(nextTarget);
 
   return nextTarget;
+}
+
+function upsertTwitchTrackedSources() {
+  for (const tracked of twitchRuntimeConfig.trackedBroadcasters) {
+    upsertTwitchTrackedSource(tracked);
+  }
+}
+
+function upsertTwitchTrackedSource(tracked: TwitchTrackedBroadcaster) {
+  sourceHub.upsert({
+    id: sourceIdForPlatform("twitch", tracked.userId, tracked.login ?? tracked.displayName, "Twitch"),
+    platform: "twitch",
+    label: tracked.displayName ?? tracked.login ?? tracked.userId,
+    channelId: tracked.userId,
+    channelName: tracked.login ?? tracked.displayName,
+    sourceUrl: tracked.login ? `https://www.twitch.tv/${tracked.login}` : null,
+    status: "unknown"
+  });
 }
 
 function removeTwitchTrackedBroadcaster(target: string) {
@@ -1045,6 +1347,26 @@ function kickCredentialsPresent() {
     publicKey: Boolean(process.env.KICK_PUBLIC_KEY_PEM),
     webhookUrl: Boolean(process.env.KICK_WEBHOOK_URL)
   };
+}
+
+function kickAuthorizationMode() {
+  if (fs.existsSync(kickSessionPath) && kickRuntimeConfig.tokenSource === "oauth") {
+    return "oauth";
+  }
+
+  if (kickRuntimeConfig.clientId && kickRuntimeConfig.clientSecret) {
+    return "app";
+  }
+
+  if (kickRuntimeConfig.accessToken) {
+    return "manual-token";
+  }
+
+  return "missing";
+}
+
+function kickDashboardSubscriptionAllowed() {
+  return kickAuthorizationMode() === "oauth";
 }
 
 async function refreshKickAccessToken() {
@@ -1430,11 +1752,15 @@ function publicTwitchConfig() {
 }
 
 function publicKickConfig() {
+  const authorizationMode = kickAuthorizationMode();
+
   return {
     ingress: "/api/webhooks/kick",
     webhookUrl: process.env.KICK_WEBHOOK_URL ?? null,
     autoSubscribeEnabled: isEnabled("KICK_AUTO_SUBSCRIBE"),
     oauthSessionStored: fs.existsSync(kickSessionPath),
+    authorizationMode,
+    canSubscribe: kickDashboardSubscriptionAllowed(),
     sessionPath: kickSessionPath,
     tokenSource: kickRuntimeConfig.tokenSource,
     ingestionEnabled: kickRuntimeConfig.ingestionEnabled,
@@ -1464,9 +1790,12 @@ function publicXConfig() {
     configured: Boolean(xRuntimeConfig.bearerToken),
     liveChatCapture: {
       running: xLiveChatWorkers.size > 0,
+      workerAutoStart: xLiveChatWorkerAutoStart,
       profilePath: xLiveChatProfilePath,
       debugPort: parsePositiveIntegerEnv("X_LIVE_CHAT_DEBUG_PORT", 9223),
       chromeFound: Boolean(findChromeExecutable(process.env.X_LIVE_CHAT_CHROME_PATH)),
+      startupTargets: xLiveChatStartupTargets,
+      configuredTargets: configuredXLiveChatTargets(),
       activeTargets
     },
     liveCapture: {
@@ -1481,6 +1810,65 @@ function publicXConfig() {
   };
 }
 
+function publicXLiveChatCaptureConfig() {
+  const activeTargets = Array.from(xLiveChatWorkers.entries()).map(([id, target]) => ({
+    id,
+    targetUrl: target.targetUrl,
+    channelName: target.channelName,
+    startedAt: target.startedAt
+  }));
+
+  return {
+    configuredTargets: configuredXLiveChatTargets(),
+    running: xLiveChatWorkers.size > 0,
+    workerAutoStart: xLiveChatWorkerAutoStart,
+    bridgeEndpoint: "/api/capture/x-live",
+    bridgeScriptPath: "/x-live-capture.js",
+    tokenRequired: Boolean(process.env.X_LIVE_CAPTURE_TOKEN),
+    captureRequired: configuredXLiveChatTargets().length > 0 && activeTargets.length === 0,
+    activeTargets,
+    status: statuses.snapshot().x ?? null
+  };
+}
+
+function configuredXLiveChatTargets() {
+  return xLiveChatStartupTargets
+    .map((input) => {
+      try {
+        const targetUrl = xLiveChatUrlFromInput(input);
+        return {
+          id: `x:${sourceKey(targetUrl)}`,
+          input,
+          targetUrl,
+          channelName: xLiveChatChannelFromInput(input)
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((target): target is { id: string; input: string; targetUrl: string; channelName: string } => Boolean(target));
+}
+
+function upsertConfiguredXLiveTargetSources() {
+  for (const target of configuredXLiveChatTargets()) {
+    const active = xLiveChatWorkers.has(target.id);
+    sourceHub.upsert({
+      id: target.id,
+      platform: "x",
+      label: target.channelName,
+      channelId: target.targetUrl,
+      channelName: target.channelName,
+      sourceUrl: target.targetUrl,
+      status: active ? "connected" : "unknown",
+      detail: active
+        ? "X livechat capture is active."
+        : xLiveChatWorkerAutoStart
+          ? "X livechat target configured; waiting for capture to connect."
+          : "X livechat target configured; run the capture agent or browser bridge to receive chat."
+    });
+  }
+}
+
 function publicDashboardConfig(req?: Request) {
   const host = req?.get("host") ?? `localhost:${port}`;
   const protocol = req?.protocol ?? "http";
@@ -1492,18 +1880,26 @@ function publicDashboardConfig(req?: Request) {
   });
 }
 
-async function refreshTwitchViewerSources() {
-  for (const tracked of twitchRuntimeConfig.trackedBroadcasters) {
-    sourceHub.upsert({
-      id: sourceIdForPlatform("twitch", tracked.userId, tracked.login ?? tracked.displayName, "Twitch"),
-      platform: "twitch",
-      label: tracked.displayName ?? tracked.login ?? tracked.userId,
-      channelId: tracked.userId,
-      channelName: tracked.login ?? tracked.displayName,
-      sourceUrl: tracked.login ? `https://www.twitch.tv/${tracked.login}` : null,
-      status: "unknown"
-    });
+function runtimeConfigSnapshot() {
+  return {
+    messageHistoryLimit,
+    viewerPollMs,
+    nativeChatRateLimit,
+    nativeChatRateWindowMs
+  };
+}
+
+function broadcastMessageSnapshot() {
+  const payload = JSON.stringify({ type: "snapshot", messages: hub.snapshot(), maxMessages: messageHistoryLimit });
+  for (const client of wss.clients) {
+    if (client.readyState === client.OPEN) {
+      client.send(payload);
+    }
   }
+}
+
+async function refreshTwitchViewerSources() {
+  upsertTwitchTrackedSources();
 
   if (!twitchRuntimeConfig.clientId || !twitchRuntimeConfig.userAccessToken || twitchRuntimeConfig.trackedBroadcasters.length === 0) {
     return;
@@ -1632,6 +2028,7 @@ async function refreshKickViewerSources() {
 
 async function refreshViewerSources() {
   updateMarketBubbleViewerSource();
+  upsertConfiguredXLiveTargetSources();
   const results = await Promise.allSettled([refreshTwitchViewerSources(), refreshKickViewerSources()]);
   const [twitchResult, kickResult] = results;
 
@@ -1687,6 +2084,61 @@ function stopXLiveChatTarget(targetId: string) {
   return target;
 }
 
+async function startXLiveChatCaptureTarget(input: string, channelNameOverride?: string | null) {
+  const chromePath = findChromeExecutable(process.env.X_LIVE_CHAT_CHROME_PATH);
+  if (!chromePath) {
+    throw new Error("Chrome or Edge was not found. Set X_LIVE_CHAT_CHROME_PATH to the browser executable.");
+  }
+
+  const targetUrl = xLiveChatUrlFromInput(input);
+  const channelName = channelNameOverride ?? xLiveChatChannelFromInput(input);
+  const targetId = `x:${sourceKey(targetUrl)}`;
+  stopXLiveChatTarget(targetId);
+  stopDemoMessages();
+
+  const worker = new XLiveChatCaptureWorker({
+    targetUrl,
+    channelName,
+    chromePath,
+    userDataDir: xLiveChatProfilePath,
+    debugPort: parsePositiveIntegerEnv("X_LIVE_CHAT_DEBUG_PORT", 9223),
+    scanMs: parsePositiveIntegerEnv("X_LIVE_CHAT_SCAN_MS", 1200),
+    publish,
+    statuses
+  });
+  xLiveChatWorkers.set(targetId, {
+    worker,
+    targetUrl,
+    channelName,
+    startedAt: new Date().toISOString()
+  });
+
+  try {
+    await worker.start();
+  } catch (error) {
+    xLiveChatWorkers.delete(targetId);
+    worker.stop();
+    throw error;
+  }
+
+  sourceHub.upsert({
+    id: targetId,
+    platform: "x",
+    label: channelName,
+    channelId: targetUrl,
+    channelName,
+    sourceUrl: targetUrl,
+    status: "connected",
+    detail: "X livechat capture"
+  });
+
+  return {
+    targetId,
+    targetUrl,
+    channelName
+  };
+}
+
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
@@ -1694,12 +2146,30 @@ app.get("/api/health", (req, res) => {
       envFileLoaded: !envLoadResult.error,
       envFilePath,
       liveSessionPath,
+      publicOnlyMode,
       realIngestionEnabled,
-      demoForced: process.env.DEMO_CHAT_FORCE === "true"
+      demoForced: process.env.DEMO_CHAT_FORCE === "true",
+      nativeChatSession: {
+        secretConfigured: Boolean(process.env.NATIVE_CHAT_SESSION_SECRET || process.env.SESSION_SECRET),
+        sameSite: nativeChatSessionSameSite
+      },
+      nativeModeration: {
+        mutedUserCount: nativeModerationStore.size,
+        mutedNetworkKeyCount: nativeModerationStore.mutedNetworkKeyCount,
+        mutedUsers: nativeModerationStore.snapshot()
+      },
+      operatorAuth: {
+        enabled: operatorAuthEnabled,
+        sessionSecretConfigured: operatorSessionSecretConfigured,
+        sameSite: operatorSessionSameSite,
+        csrfProtection: true
+      },
+      securityHeaders
     },
     demoEnabled,
     messageCount: hub.size,
     messageHistoryLimit,
+    runtimeConfig: runtimeConfigSnapshot(),
     liveSession: liveSessionStore.get(),
     sources: sourceHub.snapshot(),
     publicDashboard: publicDashboardConfig(req),
@@ -1717,14 +2187,76 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.get("/api/operator-auth/status", (req, res) => {
+  res.json({
+    required: operatorAuthEnabled,
+    authenticated: operatorRequestAuthenticated(req),
+    csrfToken: operatorCsrfTokenFromRequest(req),
+    publicOnlyMode
+  });
+});
+
+app.post("/api/operator-auth/login", (req, res) => {
+  if (!operatorAuthEnabled) {
+    return res.json({ required: false, authenticated: true, publicOnlyMode });
+  }
+
+  const parsed = operatorLoginSchema.safeParse(req.body ?? {});
+
+  if (!parsed.success || !operatorPasswordMatches(parsed.data.password, operatorPassword)) {
+    clearOperatorSessionCookie(req, res);
+    return sendError(res, 401, "Invalid operator password.");
+  }
+
+  const sessionToken = setOperatorSessionCookie(req, res);
+  return res.json({
+    required: true,
+    authenticated: true,
+    csrfToken: createOperatorCsrfToken(sessionToken, operatorSessionSecret),
+    publicOnlyMode
+  });
+});
+
+app.post("/api/operator-auth/logout", (req, res) => {
+  clearOperatorSessionCookie(req, res);
+  res.json({ required: operatorAuthEnabled, authenticated: !operatorAuthEnabled, csrfToken: null, publicOnlyMode });
+});
+
 app.get("/api/sources", (_req, res) => {
   res.json(sourceHub.snapshot());
+});
+
+app.put("/api/runtime-config", (req, res) => {
+  const parsed = runtimeConfigUpdateSchema.safeParse(req.body ?? {});
+
+  if (!parsed.success) {
+    return sendError(res, 400, "Invalid runtime settings.");
+  }
+
+  const previousViewerPollMs = viewerPollMs;
+  messageHistoryLimit = parsed.data.messageHistoryLimit ?? messageHistoryLimit;
+  viewerPollMs = parsed.data.viewerPollMs ?? viewerPollMs;
+  nativeChatRateLimit = parsed.data.nativeChatRateLimit ?? nativeChatRateLimit;
+  nativeChatRateWindowMs = parsed.data.nativeChatRateWindowMs ?? nativeChatRateWindowMs;
+  hub.setMaxMessages(messageHistoryLimit);
+  nativeChatRateBuckets.clear();
+
+  if (viewerPollMs !== previousViewerPollMs) {
+    startViewerRefreshTimer();
+  }
+
+  broadcastMessageSnapshot();
+  res.json({
+    runtimeConfig: runtimeConfigSnapshot(),
+    messageCount: hub.size
+  });
 });
 
 app.get("/api/public/config", (req, res) => {
   res.json({
     dashboard: publicDashboardConfig(req),
-    sources: sourceHub.snapshot()
+    sources: sourceHub.snapshot(),
+    xLiveChatCapture: publicXLiveChatCaptureConfig()
   });
 });
 
@@ -1756,6 +2288,30 @@ app.get("/api/messages", (_req, res) => {
   res.json({ messages: hub.snapshot() });
 });
 
+app.get("/api/emotes/betterttv/global", async (_req, res) => {
+  try {
+    res.json(await betterTtvService.globalEmotes());
+  } catch (error) {
+    statuses.set("twitch", "error", `BetterTTV global emote lookup failed: ${String(error)}`);
+    sendError(res, 502, "BetterTTV global emote lookup failed.");
+  }
+});
+
+app.get("/api/emotes/betterttv/twitch/:channelId", async (req, res) => {
+  const parsed = betterTtvChannelSchema.safeParse(req.params);
+
+  if (!parsed.success) {
+    return sendError(res, 400, "Invalid BetterTTV Twitch channel id.");
+  }
+
+  try {
+    res.json(await betterTtvService.twitchChannelEmotes(parsed.data.channelId));
+  } catch (error) {
+    statuses.set("twitch", "error", `BetterTTV channel emote lookup failed: ${String(error)}`);
+    sendError(res, 502, "BetterTTV channel emote lookup failed.");
+  }
+});
+
 app.post("/api/messages", (req, res) => {
   const parsed = chatMessageSchema.safeParse(req.body);
 
@@ -1776,6 +2332,7 @@ app.post("/api/mock/messages", (req, res) => {
 
   const now = new Date().toISOString();
   const platformMessageId = `mock-${Date.now()}`;
+  const mockChannel = mockChannelForPlatform(parsed.data.platform, parsed.data.channelName);
   const message = chatMessageSchema.parse({
     id: makeMessageId(parsed.data.platform, platformMessageId),
     platform: parsed.data.platform,
@@ -1784,8 +2341,8 @@ app.post("/api/mock/messages", (req, res) => {
     platformUserId: "local-dev-user",
     username: parsed.data.username,
     displayName: parsed.data.username,
-    channelId: "local-dev-channel",
-    channelName: parsed.data.channelName ?? "Local Development",
+    channelId: mockChannel.channelId,
+    channelName: mockChannel.channelName,
     sourceId: `local-dev:${parsed.data.platform}`,
     sourceLabel: "Local Development",
     sourceUrl: null,
@@ -1802,6 +2359,17 @@ app.post("/api/mock/messages", (req, res) => {
   res.status(201).json({ added: true, message });
 });
 
+app.get("/api/native-chat/session", (req, res) => {
+  const session = getOrCreateNativeGuestSession(req, res);
+  const liveSession = liveSessionStore.get();
+
+  res.json({
+    identity: nativeGuestIdentity(session),
+    nativeChatLabel: liveSession.nativeChatLabel,
+    maxMessageLength: 500
+  });
+});
+
 app.post("/api/native-chat/messages", (req, res) => {
   const parsed = nativeChatInputSchema.safeParse(req.body ?? {});
 
@@ -1809,17 +2377,133 @@ app.post("/api/native-chat/messages", (req, res) => {
     return sendError(res, 400, "Invalid native chat message.");
   }
 
-  if (!canPostNativeChat(nativeChatClientId(req, parsed.data.clientId))) {
+  const session = getOrCreateNativeGuestSession(req, res);
+  const identity = nativeGuestIdentity(session);
+  const clientKey = nativeChatClientId(req, identity.clientId);
+  const nativeUserId = `marketbubble:${identity.clientId}`;
+  const moderationKey = nativeChatModerationKey(req);
+
+  if (nativeModerationStore.isMuted({ userId: nativeUserId, networkKey: moderationKey })) {
+    return sendError(res, 403, "This Market Bubble guest session is muted.");
+  }
+
+  if (!canPostNativeChat(clientKey)) {
     return sendError(res, 429, "Native chat rate limit exceeded.");
   }
 
   const liveSession = liveSessionStore.get();
-  const message = createNativeChatMessage(parsed.data, {
+  const message = createNativeChatMessage(
+    {
+      ...parsed.data,
+      clientId: identity.clientId,
+      username: identity.displayName
+    },
+    {
     nativeChatLabel: liveSession.nativeChatLabel,
     streamWatchUrl: liveSession.streamWatchUrl
-  });
+    }
+  );
   const added = publish(message);
-  res.status(added ? 201 : 200).json({ added, message });
+  if (added) {
+    recordNativeMessageModerationKey(message, moderationKey);
+  }
+  res.status(added ? 201 : 200).json({ added, message, identity });
+});
+
+app.delete("/api/native-chat/messages/:messageId", (req, res) => {
+  const parsed = retainedMessageParamsSchema.safeParse(req.params);
+
+  if (!parsed.success) {
+    return sendError(res, 400, "Invalid message id.");
+  }
+
+  const message = hub.snapshot().find((item) => item.id === parsed.data.messageId);
+
+  if (!message) {
+    if (isNativeMarketBubbleMessageId(parsed.data.messageId)) {
+      broadcastMessageSnapshot();
+      return res.json({
+        removed: false,
+        alreadyAbsent: true,
+        messageId: parsed.data.messageId,
+        messageCount: hub.size
+      });
+    }
+
+    return sendError(res, 404, "Message not found.");
+  }
+
+  if (!isNativeMarketBubbleMessage(message)) {
+    return sendError(res, 409, "Only native Market Bubble messages can be moderated here.");
+  }
+
+  const removed = hub.remove(message.id);
+  if (!removed) {
+    return sendError(res, 404, "Message not found.");
+  }
+  nativeMessageModerationKeys.delete(removed.id);
+
+  broadcastMessageSnapshot();
+  res.json({
+    removed: true,
+    messageId: removed.id,
+    messageCount: hub.size
+  });
+});
+
+app.post("/api/native-chat/users/:userId/mute", (req, res) => {
+  const parsed = nativeUserParamsSchema.safeParse(req.params);
+
+  if (!parsed.success) {
+    return sendError(res, 400, "Invalid native user id.");
+  }
+
+  const userId = parsed.data.userId;
+  const retainedNativeMessages = hub
+    .snapshot()
+    .filter((message) => isNativeMarketBubbleMessage(message) && message.platformUserId === userId);
+  const latestMessage = retainedNativeMessages.at(-1);
+  const networkKeys = nativeModerationKeysForUser(userId);
+  const record = nativeModerationStore.mute({
+    userId,
+    displayName: latestMessage?.displayName ?? latestMessage?.username ?? null,
+    networkKeys
+  });
+  const removedMessageIds: string[] = [];
+
+  for (const message of retainedNativeMessages) {
+    const removed = hub.remove(message.id);
+    if (removed) {
+      removedMessageIds.push(removed.id);
+      nativeMessageModerationKeys.delete(removed.id);
+    }
+  }
+
+  broadcastMessageSnapshot();
+  res.json({
+    muted: true,
+    mute: record,
+    removedMessageIds,
+    mutedNetworkKeyCount: nativeModerationStore.mutedNetworkKeyCount,
+    messageCount: hub.size
+  });
+});
+
+app.delete("/api/native-chat/users/:userId/mute", (req, res) => {
+  const parsed = nativeUserParamsSchema.safeParse(req.params);
+
+  if (!parsed.success) {
+    return sendError(res, 400, "Invalid native user id.");
+  }
+
+  const removed = nativeModerationStore.unmute(parsed.data.userId);
+  res.json({
+    muted: false,
+    removed,
+    userId: parsed.data.userId,
+    mutedUserCount: nativeModerationStore.size,
+    mutedNetworkKeyCount: nativeModerationStore.mutedNetworkKeyCount
+  });
 });
 
 app.post("/api/webhooks/twitch/eventsub", (req: RawBodyRequest, res: Response) => {
@@ -1951,6 +2635,10 @@ app.post("/api/integrations/kick/subscribe-chat", async (req, res) => {
     return sendError(res, 400, "Invalid Kick subscription request.");
   }
 
+  if (!kickDashboardSubscriptionAllowed()) {
+    return sendError(res, 401, "Connect Kick OAuth before subscribing to Kick chat from the dashboard.");
+  }
+
   try {
     const broadcasterInput = parsed.data.broadcaster ?? parsed.data.broadcasterSlug ?? parsed.data.broadcasterUserId;
     const resolvedBroadcaster = await resolveKickBroadcaster(broadcasterInput);
@@ -1978,6 +2666,10 @@ app.post("/api/integrations/kick/subscribe-chat", async (req, res) => {
 });
 
 app.post("/api/integrations/kick/restart", async (_req, res) => {
+  if (!kickDashboardSubscriptionAllowed()) {
+    return sendError(res, 401, "Connect Kick OAuth before restarting Kick chat subscriptions from the dashboard.");
+  }
+
   try {
     const subscriptions = [];
     if (kickRuntimeConfig.trackedBroadcasters.length > 0) {
@@ -2180,7 +2872,7 @@ app.get("/api/auth/kick/callback", async (req, res) => {
       ? "Kick OAuth is connected, but the webhook subscription needs attention in Source Settings."
       : channelLookupError
         ? "Kick OAuth is connected and the webhook subscription was requested. Channel lookup was unavailable."
-        : `Authenticated ${channelLabel}. Returning to LS Chat...`;
+        : `Authenticated ${channelLabel}. Returning to Market Bubble Live Chat...`;
     res.type("html").send(`<!doctype html>
       <html lang="en">
         <head><meta charset="utf-8"><meta http-equiv="refresh" content="1;url=/"><title>Kick connected</title></head>
@@ -2246,50 +2938,10 @@ app.post("/api/integrations/x/livechat/start", async (req, res) => {
   }
 
   const input = parsed.data.url ?? parsed.data.username ?? "";
-  const chromePath = findChromeExecutable(process.env.X_LIVE_CHAT_CHROME_PATH);
-  if (!chromePath) {
-    return sendError(res, 400, "Chrome or Edge was not found. Set X_LIVE_CHAT_CHROME_PATH to the browser executable.");
-  }
-
-  let targetId: string | null = null;
   try {
-    const targetUrl = xLiveChatUrlFromInput(input);
-    const channelName = parsed.data.channelName ?? xLiveChatChannelFromInput(input);
-    targetId = `x:${sourceKey(targetUrl)}`;
-    stopXLiveChatTarget(targetId);
-    stopDemoMessages();
-    const worker = new XLiveChatCaptureWorker({
-      targetUrl,
-      channelName,
-      chromePath,
-      userDataDir: xLiveChatProfilePath,
-      debugPort: parsePositiveIntegerEnv("X_LIVE_CHAT_DEBUG_PORT", 9223),
-      scanMs: parsePositiveIntegerEnv("X_LIVE_CHAT_SCAN_MS", 1200),
-      publish,
-      statuses
-    });
-    xLiveChatWorkers.set(targetId, {
-      worker,
-      targetUrl,
-      channelName,
-      startedAt: new Date().toISOString()
-    });
-    await worker.start();
-    sourceHub.upsert({
-      id: targetId,
-      platform: "x",
-      label: channelName,
-      channelId: targetUrl,
-      channelName,
-      sourceUrl: targetUrl,
-      status: "connected",
-      detail: "X livechat capture"
-    });
-    res.status(202).json({ started: true, targetId, targetUrl, x: publicXConfig() });
+    const target = await startXLiveChatCaptureTarget(input, parsed.data.channelName);
+    res.status(202).json({ started: true, ...target, x: publicXConfig() });
   } catch (error) {
-    if (targetId) {
-      stopXLiveChatTarget(targetId);
-    }
     statuses.set("x", "error", `X livechat capture failed: ${String(error)}`);
     sendError(res, 502, "X livechat capture failed.");
   }
@@ -2554,7 +3206,7 @@ app.get("/api/auth/twitch/callback", async (req, res) => {
         <body style="font-family: system-ui; background: #0f1014; color: #f1f2f4;">
           <main style="padding: 24px;">
             <h1>Twitch connected</h1>
-            <p>Authenticated as ${safeLogin}. Returning to LS Chat...</p>
+            <p>Authenticated as ${safeLogin}. Returning to Market Bubble Live Chat...</p>
             <p><a style="color: #a970ff;" href="/">Open chat</a></p>
           </main>
         </body>
@@ -2663,6 +3315,24 @@ async function startRealIngestionWorkers() {
     startOrRestartXWorker();
   }
 
+  if (xLiveChatStartupTargets.length > 0) {
+    if (xLiveChatWorkerAutoStart) {
+      for (const target of xLiveChatStartupTargets) {
+        try {
+          await startXLiveChatCaptureTarget(target);
+        } catch (error) {
+          statuses.set("x", "error", `X livechat startup target ${target} failed: ${String(error)}`);
+        }
+      }
+    } else if (!xWorker) {
+      statuses.set(
+        "x",
+        "disabled",
+        `X livechat targets configured (${xLiveChatStartupTargets.length}). Run the capture agent or use Connect Sources to start operator capture.`
+      );
+    }
+  }
+
   if (isEnabled("KICK_AUTO_SUBSCRIBE")) {
     const kickAutoSubscribe = async () => {
       if (kickRuntimeConfig.trackedBroadcasters.length > 0) {
@@ -2690,18 +3360,26 @@ async function startRealIngestionWorkers() {
   }
 }
 
-await startRealIngestionWorkers();
-
 refreshViewerSources().catch((error) => {
   console.warn(`Viewer refresh will retry: ${String(error)}`);
 });
 
-const viewerRefreshTimer = setInterval(() => {
-  refreshViewerSources().catch((error) => {
-    console.warn(`Viewer refresh will retry: ${String(error)}`);
-  });
-}, viewerPollMs);
-viewerRefreshTimer.unref?.();
+let viewerRefreshTimer: NodeJS.Timeout | null = null;
+
+function startViewerRefreshTimer() {
+  if (viewerRefreshTimer) {
+    clearInterval(viewerRefreshTimer);
+  }
+
+  viewerRefreshTimer = setInterval(() => {
+    refreshViewerSources().catch((error) => {
+      console.warn(`Viewer refresh will retry: ${String(error)}`);
+    });
+  }, viewerPollMs);
+  viewerRefreshTimer.unref?.();
+}
+
+startViewerRefreshTimer();
 
 const twitchValidationTimer = setInterval(() => {
   if (!twitchRuntimeConfig.userAccessToken) {
@@ -2733,7 +3411,9 @@ const kickValidationTimer = setInterval(() => {
 kickValidationTimer.unref?.();
 
 process.once("SIGINT", () => {
-  clearInterval(viewerRefreshTimer);
+  if (viewerRefreshTimer) {
+    clearInterval(viewerRefreshTimer);
+  }
   clearInterval(twitchValidationTimer);
   clearInterval(kickValidationTimer);
   twitchWorker?.stop();
@@ -2746,7 +3426,9 @@ process.once("SIGINT", () => {
 });
 
 process.once("SIGTERM", () => {
-  clearInterval(viewerRefreshTimer);
+  if (viewerRefreshTimer) {
+    clearInterval(viewerRefreshTimer);
+  }
   clearInterval(twitchValidationTimer);
   clearInterval(kickValidationTimer);
   twitchWorker?.stop();
@@ -2768,16 +3450,23 @@ async function attachClientApp() {
     return;
   }
 
+  const devPublicUrl = absoluteUrlOrNull(process.env.DEV_PUBLIC_URL);
+  const devPublicUrlParts = devPublicUrl ? new URL(devPublicUrl) : null;
+  const hmr = devPublicUrlParts
+    ? {
+        server: httpServer,
+        host: devPublicUrlParts.hostname,
+        clientPort: Number(devPublicUrlParts.port || (devPublicUrlParts.protocol === "https:" ? 443 : 80)),
+        protocol: devPublicUrlParts.protocol === "https:" ? ("wss" as const) : ("ws" as const)
+      }
+    : {
+        server: httpServer
+      };
+
   const vite = await createViteServer({
     server: {
       middlewareMode: true,
-      hmr: {
-        server: httpServer,
-        host: "localhost",
-        port,
-        clientPort: port,
-        protocol: "ws"
-      }
+      hmr
     },
     appType: "spa"
   });
@@ -2787,6 +3476,9 @@ async function attachClientApp() {
 
 await attachClientApp();
 
-httpServer.listen(port, () => {
-  console.log(`LS Chat listening at http://localhost:${port}`);
+httpServer.listen(port, "0.0.0.0", () => {
+  console.log(`Market Bubble Live Chat listening on 0.0.0.0:${port}`);
+  void startRealIngestionWorkers().catch((error) => {
+    console.warn(`Real ingestion startup failed: ${String(error)}`);
+  });
 });
