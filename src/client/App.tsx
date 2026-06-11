@@ -182,7 +182,7 @@ const StreamEmbedFrame = memo(function StreamEmbedFrame({
       allowFullScreen
     />
   );
-});
+}, (previous, next) => previous.src === next.src && previous.refreshKey === next.refreshKey);
 
 type IntegrationState = "disabled" | "connecting" | "connected" | "subscribed" | "error";
 
@@ -862,7 +862,7 @@ function PreferencesPanel({
   onSetPreference,
   onSetVisualPreset
 }: {
-  presentation?: "modal" | "sheet";
+  presentation?: "modal" | "inline";
   preferences: ChatPreferences;
   visualPreset: VisualPreset;
   onClose: () => void;
@@ -876,8 +876,8 @@ function PreferencesPanel({
   return (
     <div
       className={`preferences-overlay preferences-overlay-${presentation}`}
-      role="dialog"
-      aria-modal={presentation === "modal"}
+      role={presentation === "inline" ? "region" : "dialog"}
+      aria-modal={presentation === "modal" ? true : undefined}
       aria-labelledby="preferences-title"
     >
       <section className="preferences-panel">
@@ -1510,7 +1510,6 @@ export function App() {
   const [mockPlatform, setMockPlatform] = useState<Platform>("twitch");
   const [publicConfig, setPublicConfig] = useState<PublicDashboardConfig | null>(null);
   const [activeStreamSourceId, setActiveStreamSourceId] = useState(() => window.localStorage.getItem("ls-chat-active-stream-source") ?? "");
-  const [streamSourceMenuOpen, setStreamSourceMenuOpen] = useState(false);
   const [streamFrameRefreshKey, setStreamFrameRefreshKey] = useState(0);
   const [nativeClientId] = useState(() => initialNativeClientId());
   const [nativeIdentity, setNativeIdentity] = useState<NativeChatIdentity | null>(null);
@@ -2220,12 +2219,10 @@ export function App() {
     );
     const nextIndex = (currentIndex + direction + streamSources.length) % streamSources.length;
     setActiveStreamSourceId(streamSources[nextIndex].id);
-    setStreamSourceMenuOpen(false);
   }
 
   function selectStreamSource(sourceId: string) {
     setActiveStreamSourceId(sourceId);
-    setStreamSourceMenuOpen(false);
   }
 
   function reloadStreamFrame() {
@@ -2620,7 +2617,7 @@ export function App() {
   const demoReadyCount = demoItems.filter((item) => item.ready).length;
   const preferencesPanel = preferencesOpen ? (
     <PreferencesPanel
-      presentation={isPublicDashboard ? "sheet" : "modal"}
+      presentation={isPublicDashboard ? "inline" : "modal"}
       preferences={chatPreferences}
       visualPreset={visualPreset}
       onClose={() => setPreferencesOpen(false)}
@@ -2693,7 +2690,6 @@ export function App() {
 
     return (
       <main className={`public-shell ${isEmbeddedDashboard ? "embed-shell" : ""} ${isChatOnlyEmbed ? "embed-shell-chat-only" : ""}`}>
-        {preferencesPanel}
         <header className="public-header">
           <div className="public-brand">
             <Radio size={16} aria-hidden="true" />
@@ -2731,23 +2727,9 @@ export function App() {
                   </div>
                   <em>{activeStreamMeta}</em>
                 </div>
-                <div className={`stream-source-controls ${streamSourceMenuOpen ? "stream-source-controls-menu-open" : ""}`}>
-                  <div
-                    className={`stream-source-select-wrap ${streamSourceMenuOpen ? "stream-source-select-open" : ""}`}
-                    onBlur={(event) => {
-                      const nextFocus = event.relatedTarget;
-                      if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) {
-                        setStreamSourceMenuOpen(false);
-                      }
-                    }}
-                  >
-                    <button
-                      className="stream-source-select-button"
-                      type="button"
-                      aria-haspopup="listbox"
-                      aria-expanded={streamSourceMenuOpen}
-                      onClick={() => setStreamSourceMenuOpen((open) => !open)}
-                    >
+                <div className="stream-source-controls">
+                  <label className="stream-source-select-wrap">
+                    <span className="stream-source-select-shell">
                       <span className="stream-source-select-label">
                         {activeStreamSource ? <StreamSourceMark source={activeStreamSource} /> : null}
                         <span>Source</span>
@@ -2757,40 +2739,19 @@ export function App() {
                         <span>{activeStreamMeta}</span>
                       </span>
                       <ChevronDown className="stream-source-select-chevron" size={16} aria-hidden="true" />
-                    </button>
-                    {streamSourceMenuOpen ? (
-                      <div className="stream-source-menu" role="listbox" aria-label="Stream source">
-                        {streamSources.map((source) => (
-                          <button
-                            className={`stream-source-option ${source.id === activeStreamSource?.id ? "stream-source-option-active" : ""}`}
-                            type="button"
-                            role="option"
-                            aria-selected={source.id === activeStreamSource?.id}
-                            key={source.id}
-                            onClick={() => selectStreamSource(source.id)}
-                          >
-                            <StreamSourceMark source={source} />
-                            <span className="stream-source-option-body">
-                              <span>
-                                <strong>{source.label}</strong>
-                                <em>{streamSourceMeta(source)}</em>
-                              </span>
-                              <span className="stream-source-option-meta">
-                                {source.isPrimary ? <span>Primary</span> : null}
-                                <span>{source.platform ? platformLabels[source.platform] : "Market Bubble"}</span>
-                                {source.id === activeStreamSource?.id ? (
-                                  <span className="stream-source-option-selected">
-                                    <Check size={12} aria-hidden="true" />
-                                    Selected
-                                  </span>
-                                ) : null}
-                              </span>
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
+                    </span>
+                    <select
+                      aria-label="Stream source"
+                      value={activeStreamSource?.id ?? ""}
+                      onChange={(event) => selectStreamSource(event.target.value)}
+                    >
+                      {streamSources.map((source) => (
+                        <option value={source.id} key={source.id}>
+                          {source.label} - {streamSourceMeta(source)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <button className="icon-button stream-source-nav-button" type="button" title="Previous stream source" onClick={() => cycleStreamSource(-1)}>
                     <ChevronLeft size={16} aria-hidden="true" />
                   </button>
@@ -2845,7 +2806,7 @@ export function App() {
           </section>
           ) : null}
 
-          <section className="public-chat-panel" aria-label="Combined live chat">
+          <section className={`public-chat-panel ${preferencesOpen ? "public-chat-panel-preferences-open" : ""}`} aria-label="Combined live chat">
             <div className="public-chat-header">
               <div>
                 <MessageCircle size={16} aria-hidden="true" />
@@ -2853,6 +2814,7 @@ export function App() {
               </div>
               <span>{messages.length} messages</span>
             </div>
+            {preferencesPanel}
             <div className="public-message-list">
               <Virtuoso
                 ref={virtuosoRef}
