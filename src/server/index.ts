@@ -176,6 +176,7 @@ const kickWebhookDiagnostics = {
   lastAcceptedAt: null as string | null,
   lastRejectedAt: null as string | null,
   lastRejectedReason: null as string | null,
+  lastVerificationError: null as string | null,
   lastEventType: null as string | null,
   lastChannelId: null as string | null,
   lastChannelName: null as string | null
@@ -2579,9 +2580,11 @@ app.post("/api/webhooks/kick", (req: RawBodyRequest, res: Response) => {
     kickWebhookDiagnostics.invalidSignature += 1;
     kickWebhookDiagnostics.lastRejectedAt = new Date().toISOString();
     kickWebhookDiagnostics.lastRejectedReason = "invalid_signature";
+    kickWebhookDiagnostics.lastVerificationError = "error" in verification ? verification.error ?? null : null;
     statuses.set("kick", "error", "Kick webhook rejected: invalid signature.");
     return sendError(res, 403, "Invalid Kick webhook signature.");
   }
+  kickWebhookDiagnostics.lastVerificationError = null;
 
   const eventType = req.header("Kick-Event-Type");
   if (eventType && eventType !== "chat.message.sent") {

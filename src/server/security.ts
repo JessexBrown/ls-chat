@@ -43,7 +43,7 @@ export function verifyTwitchSignature(req: RawBodyRequest) {
 }
 
 export function verifyKickSignature(req: RawBodyRequest) {
-  const publicKey = process.env.KICK_PUBLIC_KEY_PEM;
+  const publicKey = normalizePem(process.env.KICK_PUBLIC_KEY_PEM);
   if (!publicKey) {
     return { ok: true, skipped: true };
   }
@@ -58,12 +58,20 @@ export function verifyKickSignature(req: RawBodyRequest) {
   }
 
   const signedPayload = `${messageId}.${timestamp}.${rawBody}`;
-  const ok = crypto.verify(
-    "RSA-SHA256",
-    Buffer.from(signedPayload),
-    publicKey,
-    Buffer.from(signature, "base64")
-  );
+  try {
+    const ok = crypto.verify(
+      "RSA-SHA256",
+      Buffer.from(signedPayload),
+      publicKey,
+      Buffer.from(signature, "base64")
+    );
 
-  return { ok, skipped: false };
+    return { ok, skipped: false };
+  } catch (error) {
+    return { ok: false, skipped: false, error: String(error) };
+  }
+}
+
+function normalizePem(value: string | undefined) {
+  return value?.replace(/\\n/g, "\n").trim();
 }
