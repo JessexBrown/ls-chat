@@ -73,5 +73,32 @@ export function verifyKickSignature(req: RawBodyRequest) {
 }
 
 function normalizePem(value: string | undefined) {
-  return value?.replace(/\\n/g, "\n").trim();
+  if (!value) {
+    return undefined;
+  }
+
+  let normalized = value.trim();
+  if (
+    (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
+    (normalized.startsWith("'") && normalized.endsWith("'"))
+  ) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  normalized = normalized
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+
+  if (!normalized.includes("-----BEGIN")) {
+    const compact = normalized.replace(/\s+/g, "");
+    if (/^[A-Za-z0-9+/=]+$/.test(compact)) {
+      const lines = compact.match(/.{1,64}/g)?.join("\n") ?? compact;
+      normalized = `-----BEGIN PUBLIC KEY-----\n${lines}\n-----END PUBLIC KEY-----`;
+    }
+  }
+
+  return normalized;
 }
