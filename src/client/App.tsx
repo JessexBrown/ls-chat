@@ -853,6 +853,7 @@ function MessageRow({
 }
 
 function PreferencesPanel({
+  presentation = "modal",
   preferences,
   visualPreset,
   onClose,
@@ -861,6 +862,7 @@ function PreferencesPanel({
   onSetPreference,
   onSetVisualPreset
 }: {
+  presentation?: "modal" | "sheet";
   preferences: ChatPreferences;
   visualPreset: VisualPreset;
   onClose: () => void;
@@ -872,7 +874,12 @@ function PreferencesPanel({
   const selectedStyle = messageStyleOptions.find((option) => option.id === preferences.messageStyle) ?? messageStyleOptions[0];
 
   return (
-    <div className="preferences-overlay" role="dialog" aria-modal="true" aria-labelledby="preferences-title">
+    <div
+      className={`preferences-overlay preferences-overlay-${presentation}`}
+      role="dialog"
+      aria-modal={presentation === "modal"}
+      aria-labelledby="preferences-title"
+    >
       <section className="preferences-panel">
         <div className="preferences-header">
           <div>
@@ -2613,6 +2620,7 @@ export function App() {
   const demoReadyCount = demoItems.filter((item) => item.ready).length;
   const preferencesPanel = preferencesOpen ? (
     <PreferencesPanel
+      presentation={isPublicDashboard ? "sheet" : "modal"}
       preferences={chatPreferences}
       visualPreset={visualPreset}
       onClose={() => setPreferencesOpen(false)}
@@ -2723,7 +2731,7 @@ export function App() {
                   </div>
                   <em>{activeStreamMeta}</em>
                 </div>
-                <div className="stream-source-controls">
+                <div className={`stream-source-controls ${streamSourceMenuOpen ? "stream-source-controls-menu-open" : ""}`}>
                   <div
                     className={`stream-source-select-wrap ${streamSourceMenuOpen ? "stream-source-select-open" : ""}`}
                     onBlur={(event) => {

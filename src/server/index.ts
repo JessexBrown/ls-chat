@@ -2619,11 +2619,8 @@ app.post("/api/webhooks/kick", (req: RawBodyRequest, res: Response) => {
     kickWebhookDiagnostics.broadcasterNotTracked += 1;
     kickWebhookDiagnostics.lastRejectedAt = new Date().toISOString();
     kickWebhookDiagnostics.lastRejectedReason = "kick_broadcaster_not_tracked";
-    statuses.set(
-      "kick",
-      "error",
-      `Kick webhook ignored for untracked broadcaster ${message.channelName ?? message.channelId ?? "unknown"}.`
-    );
+    // Removed Kick targets can keep sending webhook deliveries briefly. Keep this diagnostic-only
+    // so stale traffic does not make the active integration look broken to operators.
     return res.status(202).json({
       accepted: true,
       ignored: true,
