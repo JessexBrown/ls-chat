@@ -32,11 +32,13 @@ docs/
   application-scope.md       Product scope, expectations, and constraints
   admin-native-user-website-readiness.md
                               Admin, native identity, and production website plan
+  demo-runbook.md            Presenter/operator script for stakeholder demos
   development-roadmap.md     Phased implementation plan
   integration-contract.md    Shared message contract and ingress endpoints
   kick-webhook-hosting.md    Public webhook URL and hosting options for Kick
   real-chat-setup.md         Real Twitch, Kick, and X ingestion setup
   render-deployment.md       Render Web Service deployment checklist
+  stakeholder-setup-guide.md Setup handoff for credentials, Render, sources, and embeds
   website-embed-install.md   Copy-paste iframe install snippets for the website
   x-live-capture.md          Browser-assisted X broadcast chat workaround
 src/
