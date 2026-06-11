@@ -1510,6 +1510,7 @@ export function App() {
   const [mockPlatform, setMockPlatform] = useState<Platform>("twitch");
   const [publicConfig, setPublicConfig] = useState<PublicDashboardConfig | null>(null);
   const [activeStreamSourceId, setActiveStreamSourceId] = useState(() => window.localStorage.getItem("ls-chat-active-stream-source") ?? "");
+  const [streamSourceMenuOpen, setStreamSourceMenuOpen] = useState(false);
   const [streamFrameRefreshKey, setStreamFrameRefreshKey] = useState(0);
   const [nativeClientId] = useState(() => initialNativeClientId());
   const [nativeIdentity, setNativeIdentity] = useState<NativeChatIdentity | null>(null);
@@ -2219,10 +2220,12 @@ export function App() {
     );
     const nextIndex = (currentIndex + direction + streamSources.length) % streamSources.length;
     setActiveStreamSourceId(streamSources[nextIndex].id);
+    setStreamSourceMenuOpen(false);
   }
 
   function selectStreamSource(sourceId: string) {
     setActiveStreamSourceId(sourceId);
+    setStreamSourceMenuOpen(false);
   }
 
   function reloadStreamFrame() {
@@ -2728,8 +2731,27 @@ export function App() {
                   <em>{activeStreamMeta}</em>
                 </div>
                 <div className="stream-source-controls">
-                  <label className="stream-source-select-wrap">
-                    <span className="stream-source-select-shell">
+                  <div
+                    className={`stream-source-select-wrap ${streamSourceMenuOpen ? "stream-source-select-open" : ""}`}
+                    onBlur={(event) => {
+                      const nextFocus = event.relatedTarget;
+                      if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) {
+                        setStreamSourceMenuOpen(false);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        setStreamSourceMenuOpen(false);
+                      }
+                    }}
+                  >
+                    <button
+                      className="stream-source-select-button"
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={streamSourceMenuOpen}
+                      onClick={() => setStreamSourceMenuOpen((open) => !open)}
+                    >
                       <span className="stream-source-select-label">
                         {activeStreamSource ? <StreamSourceMark source={activeStreamSource} /> : null}
                         <span>Source</span>
@@ -2739,19 +2761,41 @@ export function App() {
                         <span>{activeStreamMeta}</span>
                       </span>
                       <ChevronDown className="stream-source-select-chevron" size={16} aria-hidden="true" />
-                    </span>
-                    <select
-                      aria-label="Stream source"
-                      value={activeStreamSource?.id ?? ""}
-                      onChange={(event) => selectStreamSource(event.target.value)}
-                    >
+                    </button>
+                    {streamSourceMenuOpen ? (
+                      <div className="stream-source-menu" role="listbox" aria-label="Stream source">
                       {streamSources.map((source) => (
-                        <option value={source.id} key={source.id}>
-                          {source.label} - {streamSourceMeta(source)}
-                        </option>
+                        <button
+                          className={`stream-source-option ${source.id === activeStreamSource?.id ? "stream-source-option-active" : ""}`}
+                          type="button"
+                          role="option"
+                          aria-selected={source.id === activeStreamSource?.id}
+                          key={source.id}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectStreamSource(source.id)}
+                        >
+                          <StreamSourceMark source={source} />
+                          <span className="stream-source-option-body">
+                            <span>
+                              <strong>{source.label}</strong>
+                              <em>{streamSourceMeta(source)}</em>
+                            </span>
+                            <span className="stream-source-option-meta">
+                              {source.isPrimary ? <span>Primary</span> : null}
+                              <span>{source.platform ? platformLabels[source.platform] : "Market Bubble"}</span>
+                              {source.status ? <span>{source.status}</span> : null}
+                            </span>
+                          </span>
+                          {source.id === activeStreamSource?.id ? (
+                            <span className="stream-source-option-check">
+                              <Check size={13} aria-hidden="true" />
+                            </span>
+                          ) : null}
+                        </button>
                       ))}
-                    </select>
-                  </label>
+                      </div>
+                    ) : null}
+                  </div>
                   <button className="icon-button stream-source-nav-button" type="button" title="Previous stream source" onClick={() => cycleStreamSource(-1)}>
                     <ChevronLeft size={16} aria-hidden="true" />
                   </button>
