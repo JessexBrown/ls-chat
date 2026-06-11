@@ -3071,10 +3071,10 @@ h1 {
 .stream-source-menu {
   position: absolute;
   right: -1px;
-  bottom: calc(100% + 10px);
+  top: calc(100% + 8px);
   z-index: 80;
   width: min(460px, calc(100vw - 24px));
-  max-height: min(330px, calc(100dvh - 116px));
+  max-height: min(330px, 42dvh);
   overflow-y: auto;
   display: grid;
   gap: 6px;
@@ -3095,11 +3095,11 @@ h1 {
   content: "";
   position: absolute;
   right: 17px;
-  bottom: -6px;
+  top: -6px;
   width: 10px;
   height: 10px;
-  border-right: 1px solid rgba(232, 255, 156, 0.28);
-  border-bottom: 1px solid rgba(232, 255, 156, 0.28);
+  border-top: 1px solid rgba(232, 255, 156, 0.28);
+  border-left: 1px solid rgba(232, 255, 156, 0.28);
   background: #090b0f;
   transform: rotate(45deg);
 }
