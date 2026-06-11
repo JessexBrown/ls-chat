@@ -6,6 +6,19 @@ Market Bubble Live Chat is a unified live hub for combining chat from Twitch, Ki
 
 The project is currently built as a demo-ready MVP for Market Bubble. It is meant to show the product direction clearly: Market Bubble can own the main live destination while external platforms become inputs and optional stream playback sources.
 
+## Live Demo Links
+
+Current hosted demo:
+
+- Public live hub: https://marketbubble-live-chat.onrender.com/live
+- Full embed view: https://marketbubble-live-chat.onrender.com/embed
+- Chat-only embed view: https://marketbubble-live-chat.onrender.com/embed?view=chat
+- Market Bubble proof page: https://marketbubble-live-chat.onrender.com/mock-marketbubble
+- Public config snapshot: https://marketbubble-live-chat.onrender.com/api/public/config
+- Admin/operator dashboard: https://marketbubble-live-chat.onrender.com/
+
+The admin dashboard requires the configured Render `ADMIN_PASSWORD`.
+
 ## What This Application Does
 
 The app has two major audiences.
@@ -113,6 +126,18 @@ npm run verify
 
 `npm run verify` runs Vitest and the production build.
 
+## Documentation Index
+
+Start with `docs/README.md` for a guided map of the project documentation.
+
+High-value reviewer documents:
+
+- `docs/marketbubble-live-hub.md` explains the product vision and current implementation slice.
+- `docs/stakeholder-setup-guide.md` explains credentials, hosting, and operating flow.
+- `docs/demo-runbook.md` gives the stakeholder demo script.
+- `docs/production-readiness-checklist.md` lists functional checks and known launch gaps.
+- `SECURITY.md` summarizes security assumptions, secrets, and production caveats.
+
 ## Available Scripts
 
 ```text
@@ -151,6 +176,7 @@ src/shared/
   preferences.ts         Viewer chat preference defaults and persistence helpers
 
 docs/
+  README.md                              Documentation index for reviewers
   application-scope.md                  Scope, expectations, and constraints
   development-roadmap.md                Original phased roadmap
   integration-contract.md               Shared message contract and ingress endpoints
@@ -166,6 +192,8 @@ docs/
 
 extensions/x-live-capture/
   README.md              Optional browser-extension notes for X capture experiments
+
+SECURITY.md              Security and operations notes for reviewers
 ```
 
 ## Configuration Overview
